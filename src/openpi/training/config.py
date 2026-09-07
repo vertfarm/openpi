@@ -656,6 +656,45 @@ _CONFIGS = [
             ),
         ),
     ),
+    TrainConfig(
+        # Serve the official pi05_droid_jointpos checkpoint to the existing KETI DROID client.
+        # The checkpoint predicts joint-position deltas. Output transforms first reconstruct
+        # absolute joint targets, then convert them to the normalized joint-velocity convention
+        # expected by the 3090 workstation and G15 controller.
+        name="pi05_droid_jointpos_velocity",
+        model=pi0_config.Pi0Config(action_dim=32, action_horizon=15, pi05=True),
+        data=SimpleDataConfig(
+            assets=AssetsConfig(asset_id="droid"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    droid_policy.DroidInputs(model_type=ModelType.PI05),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(7, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(7, -1)),
+                    droid_policy.JointPositionToDroidVelocity(
+                        expected_horizon=15,
+                        joint_delta_scale=0.2,
+                        max_abs_velocity=0.5,
+                    ),
+                    droid_policy.DroidOutputs(),
+                ],
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        policy_metadata={
+            "model": "pi05_droid_jointpos",
+            "checkpoint": "gs://openpi-assets/checkpoints/pi05_droid_jointpos",
+            "source_action_space": "joint_position",
+            "output_action_space": "joint_velocity",
+            "action_horizon": 15,
+            "action_dim": 8,
+            "joint_delta_scale": 0.2,
+            "max_abs_joint_velocity": 0.5,
+        },
+    ),
     #
     # Fine-tuning Libero configs.
     #
