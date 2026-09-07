@@ -37,6 +37,9 @@ class Args:
 
     # Rollout parameters
     max_timesteps: int = 600
+    # Length of the action chunk returned by the policy server. `pi05_droid_jointpos` has an
+    # action horizon of 16 (the joint velocity DROID configs use 10).
+    action_horizon: int = 16
     # How many actions to execute from a predicted action chunk before querying policy server again
     # 8 is usually a good default (equals 0.5 seconds of action execution).
     open_loop_horizon: int = 8
@@ -76,8 +79,10 @@ def main(args: Args):
         args.external_camera is not None and args.external_camera in ["left", "right"]
     ), f"Please specify an external camera to use for the policy, choose from ['left', 'right'], but got {args.external_camera}"
 
-    # Initialize the Panda environment. Using joint velocity action space and gripper position action space is very important.
-    env = RobotEnv(action_space="joint_velocity", gripper_action_space="position")
+    # Initialize the Panda environment. `pi05_droid_jointpos` predicts absolute joint *positions*,
+    # so the env must use the joint position action space (the joint velocity configs use
+    # action_space="joint_velocity" here). Gripper position action space is unchanged.
+    env = RobotEnv(action_space="joint_position", gripper_action_space="position")
     print("Created the droid env!")
 
     # Connect to the policy server
@@ -129,9 +134,9 @@ def main(args: Args):
                     # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                     # Ctrl+C will be handled after the server call is complete
                     with prevent_keyboard_interrupt():
-                        # this returns action chunk [10, 8] of 10 joint velocity actions (7) + gripper position (1)
+                        # this returns action chunk [16, 8] of 16 joint position actions (7) + gripper position (1)
                         pred_action_chunk = policy_client.infer(request_data)["actions"]
-                    assert pred_action_chunk.shape == (10, 8)
+                    assert pred_action_chunk.shape == (args.action_horizon, 8)
 
                 # Select current action to execute from chunk
                 action = pred_action_chunk[actions_from_chunk_completed]
@@ -145,8 +150,10 @@ def main(args: Args):
                     # action[-1] = 0.0
                     action = np.concatenate([action[:-1], np.zeros((1,))])
 
-                # clip all dimensions of action to [-1, 1]
-                action = np.clip(action, -1, 1)
+                # Joint position actions are absolute targets in radians and must not be clipped to
+                # [-1, 1] (that would be valid only for the normalized joint velocity action space).
+                # Only the gripper command is bounded, to [0, 1].
+                action = np.concatenate([action[:-1], np.clip(action[-1:], 0, 1)])
 
                 env.step(action)
 

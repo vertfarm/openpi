@@ -631,6 +631,31 @@ _CONFIGS = [
             ),
         ),
     ),
+    TrainConfig(
+        # Inference config for pi05-DROID checkpoints trained in the *joint position* action space
+        # (e.g. `pi05_full_droid_finetune`), as opposed to `pi05_droid`, which is joint *velocity*.
+        # The model predicts joint position *deltas* relative to the current state, so we add the
+        # state back on the way out to recover absolute joint position targets. The gripper
+        # dimension stays absolute in both action spaces.
+        name="pi05_droid_jointpos",
+        model=pi0_config.Pi0Config(action_dim=32, action_horizon=16, pi05=True),
+        data=SimpleDataConfig(
+            assets=AssetsConfig(asset_id="droid"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    droid_policy.DroidInputs(model_type=ModelType.PI05),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(7, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(7, -1)),
+                    droid_policy.DroidOutputs(),
+                ],
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+    ),
     #
     # Fine-tuning Libero configs.
     #
