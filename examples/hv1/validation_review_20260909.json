@@ -1,0 +1,14 @@
+{
+  "scan_sha256": "bb5d6bedc0f25c0d6cf9d5e671be5ee4e12493defc3741fbaaef32617b029915",
+  "reviewer": "assistant visual inspection of generated head/hand_l/hand_r phase contact sheets",
+  "scope": "sampled approach, grasp, transport, release and final frames; not a full temporal motion/safety audit",
+  "episodes": {
+    "episode_000027": {"verdict":"pass","evidence":"cylinder starts on table, is carried to tray, released and remains in tray after hand retracts"},
+    "episode_000028": {"verdict":"pass","evidence":"three views show table grasp and tray release with hand retraction"},
+    "episode_000029": {"verdict":"pass","evidence":"cylinder placed upright on tray and fingers opening; recording ends soon after release, retraction incomplete"},
+    "episode_000030": {"verdict":"pass","evidence":"cylinder transported above tray then released; final head view shows empty hand and cylinder in tray"},
+    "episode_000031": {"verdict":"pass","evidence":"head and auxiliary view show tray placement and release; final cylinder remains upright"},
+    "episode_000032": {"verdict":"pass","evidence":"table grasp, transport, tray release and hand retraction visible"}
+  },
+  "robot_motion_authorized": false
+}

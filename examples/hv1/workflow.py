@@ -98,9 +98,10 @@ def validate_profile(p):
             for key in ("path", "timestamps_ns"):
                 if not isinstance(s[key], str) or not s[key] or ".." in s[key].split("/"):
                     raise ContractError("invalid HDF5 path")
-        for key in ("complete_attribute", "episode_id_attribute", "session_id_attribute", "task_attribute"):
-            if not p[key]:
-                raise ContractError(f"{key} required")
+        if p.get("source_format") != "keti_hdf5_hevc_v1":
+            for key in ("complete_attribute", "episode_id_attribute", "session_id_attribute", "task_attribute"):
+                if not p[key]:
+                    raise ContractError(f"{key} required")
     except (KeyError, TypeError) as exc:
         raise ContractError(f"missing/invalid profile field: {exc}") from exc
     return p
