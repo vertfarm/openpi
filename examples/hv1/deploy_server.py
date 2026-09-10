@@ -17,8 +17,12 @@ import numpy as np
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import CAMERAS
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import CONTRACT
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import CONTRACT_SHA
+from .ros.keti_humanoid_inference.keti_humanoid_inference.core import CORE_SOURCE_SHA256
+from .ros.keti_humanoid_inference.keti_humanoid_inference.core import HAND_ENVELOPE_MARGIN_RAD
+from .ros.keti_humanoid_inference.keti_humanoid_inference.core import HAND_STATE
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import PROMPT
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import Rejected
+from .ros.keti_humanoid_inference.keti_humanoid_inference.core import validate_hand_envelope
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import vector
 
 
@@ -93,6 +97,13 @@ def load_snapshot(campaign, snapshot, denoise=10, *, registry=None):
             config = configure(campaign, record["recipe"])[0]
         else:
             config = registered
+        data_config = config.data.create(config.assets_dirs, config.model)
+        state_stats = None if data_config.norm_stats is None else data_config.norm_stats.get("state")
+        if state_stats is None or state_stats.q01 is None or state_stats.q99 is None:
+            raise Rejected("state quantile statistics missing")
+        q01, q99 = np.asarray(state_stats.q01), np.asarray(state_stats.q99)
+        if q01.shape != (15,) or q99.shape != (15,):
+            raise Rejected("state quantile statistics have wrong shape")
         from openpi.policies.policy_config import create_trained_policy
 
         policy = create_trained_policy(config, snapshot, default_prompt=PROMPT, sample_kwargs={"num_steps": denoise})
@@ -111,6 +122,7 @@ def load_snapshot(campaign, snapshot, denoise=10, *, registry=None):
         "ready": True,
         "contract": CONTRACT,
         "contract_sha256": CONTRACT_SHA,
+        "adapter_core_sha256": CORE_SOURCE_SHA256,
         "snapshot": str(snapshot),
         "snapshot_sha256": file_hash(snapshot / "snapshot.json"),
         "experiment": record["recipe"]["name"],
@@ -119,6 +131,12 @@ def load_snapshot(campaign, snapshot, denoise=10, *, registry=None):
         "denoise": denoise,
         "camera_dropout": False,
         "norm_stats_sha256": config.policy_metadata["norm_stats_sha256"],
+        "hand_state_envelope": {
+            "names": list(HAND_STATE),
+            "q01": q01[7:].tolist(),
+            "q99": q99[7:].tolist(),
+            "margin_rad": HAND_ENVELOPE_MARGIN_RAD,
+        },
         "robot_commands_sent": 0,
     }
     return policy, meta, lock
@@ -169,6 +187,7 @@ def make_handler(policy, metadata):
                     return
                 started = time.perf_counter()
                 state = vector(payload["state"], 15).astype(np.float32)
+                validate_hand_envelope(state[7:], metadata)
                 images = prepare_images(payload)
                 prepared = time.perf_counter()
                 actions = np.asarray(policy.infer({"state": state, "images": images, "prompt": PROMPT})["actions"])
@@ -185,6 +204,8 @@ def make_handler(policy, metadata):
                         "server_ms": (time.perf_counter() - started) * 1000,
                     },
                 )
+            except Rejected as error:
+                self.reply(422, {"error": str(error)})
             except (ValueError, KeyError, TypeError) as error:
                 self.reply(400, {"error": str(error)})
             except (BrokenPipeError, ConnectionResetError):

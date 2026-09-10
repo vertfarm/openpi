@@ -1,4 +1,4 @@
-# HV1 π0.5 배포 — shadow 검증 완료, 실기 interlock 연동 대기
+# HV1 π0.5 배포 — 오프라인 intent 조건화 검증, 실기 interlock 연동 대기
 
 목표는 학습 모델의 실시간 배포다. 수집 레시피는 관측·명령·시작 자세의
 계약이며, 전체 시연 재생은 배포 선행조건이 아니다.
@@ -35,6 +35,17 @@
   유지한다. 손 속도를 역추정하지 않고, 손 관절 기록을 on/off 출력 대신 보내지 않는다.
 - denoise 10, horizon 15, 한 번에 미래 3개를 30Hz 실행. 추론 1개만 in-flight,
   만료 prefix는 시간 정렬로 제외하며 catch-up burst를 금지한다.
+- grasp intent는 손가락 8축 목표가 아니라 close/open 사건을 결정하는 스칼라다.
+  실행기는 close 0.7/open 0.3 히스테리시스와 연속 유지시간을 적용한다. close가
+  시작된 뒤 Grasp action 결과를 받기 전에는 open을 보내지 않고, guardian의
+  release 허가가 올 때까지 해제를 보류한다. 유지시간은 저장된 시계열 스윕 결과를
+  감독자가 검토해 선택하며 기본 0.2초를 실기 승인값으로 간주하지 않는다.
+- 서버는 학습 통계의 hand state q01/q99에 축별 0.05 rad 절대 여유를 둔 준비자세
+  envelope를 `/health`로 제공한다. client와 server가 모두 이를 검사하며, 학습 때의
+  mode 2 + open 0.6 준비자세와 크게 다른 raw-home 입력은 clipping 없이 거부한다.
+- `/health`의 `adapter_core_sha256`은 서버가 읽은 `core.py`와 ROS 실행 사본을
+  byte 단위로 묶는다. 불일치하면 시작을 거부한다. 데이터 계약 해시만 일치하는 것은
+  실행 코드가 같다는 증거가 아니다.
 - 실제 입력 주기 측정: 관절 약 100Hz, head 30Hz, hand_l/hand_r 약 12Hz.
   최신 메시지만 조합하면 skew가 주기적으로 커져 후보 큐가 끊기는 것을 확인했다.
   bounded history에서 시간적으로 가까운 fresh 관측을 선택하며 state 100ms,
@@ -141,3 +152,27 @@ MQTT는 모의 객체로 대체한다. 실제 domain 10에서 이 테스트의 s
 결과 해석: client/transport/command semantics 검수는 모델 성공률과 다르다.
 C-5000은 기록된 release 관측에서도 close를 출력한 사례가 있다. 실제 실기 전
 shadow 결과와 safety interlock을 확인하며, 안전 제한 완화로 해결하지 않는다.
+
+## 감독자 부재 시 오프라인 검증
+
+E-stop 체결·팔 torque 해제 상태에서는 `vla_client`를 shadow 포함 어떤 모드로도
+실행하지 않는다. 저장된 correct-hand `events.jsonl`의 target action과 GPU로 한 번
+생성한 teacher-forced intent sidecar만 재생한다. 관측이나 서비스가 없으면 재시도,
+ROS stack 재시작 또는 우회를 하지 않는다.
+
+```bash
+# 각 8개 snapshot에 대해 한 번씩, GPU lock을 지키며 직렬 실행
+python -B -m examples.hv1.two_track_eval evaluate-intents \
+  --campaign CAMPAIGN --snapshot SNAPSHOT --allow-gpu-run
+
+# 이후 스윕은 CPU-only이며 기존 evaluation/shadow 파일을 수정하지 않는다.
+python -B -m examples.hv1.two_track_eval sweep-filter \
+  --campaign CAMPAIGN --shadow-root CAMPAIGN/shadow \
+  --output CAMPAIGN/evaluations/grasp_filter_sweep.json
+```
+
+스윕은 유지시간 0.1/0.2/0.3/0.5초별 missed/extra close, close 시간오차,
+정적 correct-hand 재생의 false close를 함께 낸다. 기존 평가를 새 점수로 덮어쓰지
+않고, 필터 결과만으로 체크포인트를 자동 선정하거나 ARM하지 않는다. 야간 build 뒤에는
+ROS 노드를 띄우는 대신 `ros2 pkg prefix`, Python import 경로, `core.py` SHA-256만
+기록한다. live shadow와 실기는 감독자가 있는 시간에 다시 수행한다.

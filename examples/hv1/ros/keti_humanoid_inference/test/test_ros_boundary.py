@@ -23,6 +23,7 @@ from keti_humanoid_inference.core import ARM_COMMAND
 from keti_humanoid_inference.core import ARM_STATE
 from keti_humanoid_inference.core import CONTRACT
 from keti_humanoid_inference.core import CONTRACT_SHA
+from keti_humanoid_inference.core import CORE_SOURCE_SHA256
 from keti_humanoid_inference.core import HAND_STATE
 from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
@@ -47,6 +48,13 @@ class FakeClient:
             action_horizon=15,
             denoise=10,
             snapshot_sha256="SYNTHETIC",
+            adapter_core_sha256=CORE_SOURCE_SHA256,
+            hand_state_envelope={
+                "names": list(HAND_STATE),
+                "q01": [-1.0] * 8,
+                "q99": [1.0] * 8,
+                "margin_rad": 0.05,
+            },
         )
 
     def infer(self, request, sha):
@@ -193,6 +201,9 @@ def test_ros_boundary(tmp_path, monkeypatch, mode):
         output=str(tmp_path / "run"),
         mqtt_host="FAKE-NOT-CONNECTED",
         seconds=0,
+        grip_close_threshold=0.7,
+        grip_open_threshold=0.3,
+        grip_min_hold=0.0,
     )
     rclpy.init()
     rig, node = Rig(), implementation.DeployNode(args)

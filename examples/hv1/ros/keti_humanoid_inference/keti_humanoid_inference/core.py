@@ -7,6 +7,7 @@ from collections import deque
 import hashlib
 import json
 import math
+from pathlib import Path
 import time
 import urllib.request
 
@@ -43,6 +44,8 @@ CONTRACT = {
     "horizon": 15,
 }
 CONTRACT_SHA = hashlib.sha256(json.dumps(CONTRACT, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+CORE_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+HAND_ENVELOPE_MARGIN_RAD = 0.05
 
 
 class Rejected(ValueError):
@@ -73,6 +76,32 @@ def validate_metadata(meta):
         raise Rejected("server not ready / wrong horizon")
     if not meta.get("snapshot_sha256") or meta.get("denoise") != 10:
         raise Rejected("unqualified snapshot / sampling settings")
+    if meta.get("adapter_core_sha256") != CORE_SOURCE_SHA256:
+        raise Rejected("server/ROS adapter core source mismatch")
+    envelope = meta.get("hand_state_envelope")
+    if not isinstance(envelope, dict) or envelope.get("names") != list(HAND_STATE):
+        raise Rejected("missing hand-state training envelope")
+    q01, q99 = vector(envelope.get("q01"), 8), vector(envelope.get("q99"), 8)
+    margin = float(envelope.get("margin_rad", float("nan")))
+    if np.any(q01 > q99) or not math.isfinite(margin) or not 0 < margin <= 0.2:
+        raise Rejected("invalid hand-state training envelope")
+
+
+def validate_hand_envelope(hand, metadata):
+    """Reject grossly out-of-distribution hand preparation without clipping it."""
+    values = vector(hand, 8)
+    envelope = metadata.get("hand_state_envelope", {})
+    if envelope.get("names") != list(HAND_STATE):
+        raise Rejected("hand-state envelope identity mismatch")
+    q01, q99 = vector(envelope.get("q01"), 8), vector(envelope.get("q99"), 8)
+    margin = float(envelope.get("margin_rad", float("nan")))
+    if not math.isfinite(margin) or not 0 < margin <= 0.2:
+        raise Rejected("invalid hand-state envelope margin")
+    outside = np.flatnonzero((values < q01 - margin) | (values > q99 + margin))
+    if len(outside):
+        names = ",".join(HAND_STATE[index] for index in outside)
+        raise Rejected(f"hand state outside training envelope: {names}")
+    return values
 
 
 def make_request(sequence, state, images):
@@ -249,24 +278,64 @@ class ChunkQueue:
         return due, action
 
 
-class GripEdges:
-    """One pilot open-close-release cycle, not eight hand joint targets."""
+class IntentConditioner:
+    """Hysteresis and dwell filtering for the scalar grasp-intent target stream."""
 
-    def __init__(self):
+    def __init__(self, *, close_threshold=0.7, open_threshold=0.3, min_hold_s=0.2):
+        values = (float(open_threshold), float(close_threshold), float(min_hold_s))
+        if not all(math.isfinite(value) for value in values) or not 0 <= values[0] < values[1] <= 1:
+            raise Rejected("invalid gripper hysteresis")
+        if not 0 <= values[2] <= 2:
+            raise Rejected("invalid gripper dwell")
+        self.open_threshold, self.close_threshold, self.min_hold_s = values
+        self.closed = False
+        self.candidate = None
+        self.candidate_since = None
+        self.last_time = None
+
+    def update(self, value, now):
+        value, now = float(value), float(now)
+        if not math.isfinite(value) or not math.isfinite(now):
+            raise Rejected("nonfinite gripper intent/time")
+        if self.last_time is not None and now < self.last_time:
+            raise Rejected("gripper time moved backwards")
+        self.last_time = now
+        desired = None
+        if not self.closed and value >= self.close_threshold:
+            desired = True
+        elif self.closed and value <= self.open_threshold:
+            desired = False
+        if desired is None:
+            self.candidate = self.candidate_since = None
+            return None
+        if desired != self.candidate:
+            self.candidate, self.candidate_since = desired, now
+        if now - self.candidate_since + 1e-12 < self.min_hold_s:
+            return None
+        self.closed = desired
+        self.candidate = self.candidate_since = None
+        return "close" if desired else "open"
+
+
+class GripEdges:
+    """Condition one pilot open-close-release cycle, never hand joint targets."""
+
+    def __init__(self, **conditioner):
+        self.conditioner = IntentConditioner(**conditioner)
         self.phase = 0
 
-    def update(self, value):
-        if not math.isfinite(value):
-            raise Rejected("nonfinite gripper intent")
-        closed = value >= 0.5
-        if self.phase == 0 and closed:
-            self.phase = 1
-            return "close"
-        if self.phase == 1 and not closed:
-            self.phase = 2
-            return "open"
-        if self.phase == 2 and closed:
+    def update(self, value, now=None):
+        event = self.conditioner.update(value, time.monotonic() if now is None else now)
+        if event == "close":
+            if self.phase == 0:
+                self.phase = 1
+                return event
             raise Rejected("second grasp cycle requires operator reset")
+        if event == "open":
+            if self.phase == 1:
+                self.phase = 2
+                return event
+            raise Rejected("release requested before grasp intent")
         return None
 
 

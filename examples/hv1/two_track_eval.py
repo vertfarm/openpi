@@ -19,8 +19,11 @@ from .artifacts import write_new_json
 from .checkpoints import snapshot_identity
 from .native import CAMERAS
 from .native import PROMPT
+from .ros.keti_humanoid_inference.keti_humanoid_inference.core import IntentConditioner
 from .two_track_config import configure
 from .two_track_config import local_dataset
+
+SNAPSHOT_STEPS = (250, 500, 1000, 2000)
 
 
 def _edges(values):
@@ -77,6 +80,28 @@ def transition_metrics(predicted, truth, close_frames, release_frames, fps=30):
     )
 
 
+def condition_intents(values, *, times=None, fps=30, close_threshold=0.7, open_threshold=0.3, min_hold_s=0.2):
+    """Apply the same deploy-time hysteresis/dwell conditioner to an intent timeline."""
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim != 1 or not len(values) or not np.isfinite(values).all():
+        raise ContractError("finite nonempty scalar intent series required")
+    times = np.arange(len(values), dtype=np.float64) / fps if times is None else np.asarray(times, dtype=np.float64)
+    if times.shape != values.shape or not np.isfinite(times).all() or np.any(np.diff(times) < 0):
+        raise ContractError("monotonic intent times required")
+    conditioner = IntentConditioner(
+        close_threshold=close_threshold,
+        open_threshold=open_threshold,
+        min_hold_s=min_hold_s,
+    )
+    filtered, events = [], []
+    for value, now in zip(values, times, strict=True):
+        event = conditioner.update(value, now)
+        if event:
+            events.append({"event": event, "time_s": float(now)})
+        filtered.append(float(conditioner.closed))
+    return np.asarray(filtered, dtype=np.float32), events
+
+
 def _observation(raw):
     return dict(
         state=np.asarray(raw["observation.state"]),
@@ -85,7 +110,7 @@ def _observation(raw):
     )
 
 
-def evaluate(campaign, snapshot, *, reference=None, smoke=False):
+def evaluate(campaign, snapshot, *, reference=None, smoke=False, intent_sidecar=False):
     campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
     manifest = two_track.verify_campaign(campaign, raw=True)
     if not snapshot.is_relative_to(campaign / "snapshots"):
@@ -135,6 +160,7 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False):
         success_rate_measured=False,
         normalization_sha256=record["norm_stats_sha256"],
     )
+    raw_intents = []
     with FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0):
         first = diagnostics[0]
         first_raw = dataset[offsets[first["id"]]]
@@ -176,6 +202,18 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False):
                 first_steps.append(float(np.max(np.abs(prediction[0, :7] - state[:7]))))
                 chunk_steps.append(float(np.max(np.abs(np.diff(prediction[:, :7], axis=0)))))
             prediction, truth = np.asarray(predictions), np.asarray(truths)
+            raw_intents.append(
+                {
+                    "episode": episode["id"],
+                    "frames": episode["frames"],
+                    "training_overlap": episode["id"] in selected,
+                    "suspect": episode["suspect"],
+                    "grasp_frames": episode["grasp_frames"],
+                    "release_frames": episode["release_frames"],
+                    "predicted_grasp_intent": prediction[:, 7].tolist(),
+                    "truth_grasp_intent": truth[:, 7].tolist(),
+                }
+            )
             result["groups"][episode["diagnostic_group"]].append(
                 dict(
                     episode=episode["id"],
@@ -199,6 +237,31 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False):
     if not smoke and any(len(result["groups"][group]) != 6 for group in result["groups"]):
         raise ContractError("both fixed diagnostic groups must contain six episodes")
     result.update(gpu_reload_pass=True, complete=True, evaluated_rows=sum(e["frames"] for e in diagnostics))
+    if intent_sidecar:
+        sidecar = {
+            "schema": "hv1_grasp_intent_series_v1",
+            "manifest_sha256": manifest["sha256"],
+            "snapshot": str(snapshot),
+            "snapshot_sha256": result["snapshot_sha256"],
+            "experiment": recipe["name"],
+            "step": record["step"],
+            "denoise": 10,
+            "fps": 30,
+            "closed_loop": False,
+            "robot_commands_sent": 0,
+            "episodes": raw_intents,
+        }
+        directory = campaign / "evaluations" / "intent_series"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{recipe['name']}_{record['step']:06d}.json"
+        write_new_json(path, sidecar)
+        return {
+            "complete": True,
+            "intent_sidecar": str(path),
+            "snapshot_sha256": result["snapshot_sha256"],
+            "episodes": len(raw_intents),
+            "robot_commands_sent": 0,
+        }
     path = campaign / "evaluations" / f"{recipe['name']}_{record['step']:06d}.json"
     write_new_json(path, result)
     return result
@@ -318,26 +381,172 @@ def compare(campaign):
     return result
 
 
+def _read_events(path):
+    events = []
+    with Path(path).open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, 1):
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict) or not isinstance(event.get("event"), str):
+                raise ContractError(f"invalid shadow event at {path}:{line_number}")
+            events.append(event)
+    return events
+
+
+def _correct_hand_shadows(root):
+    """Select the valid correct-hand log with most scheduled targets for each checkpoint."""
+    selected = {}
+    ignored = []
+    for path in sorted(Path(root).glob("hv1_shadow_*_correcthand_r*/events.jsonl")):
+        events = _read_events(path)
+        startup = next((event for event in events if event["event"] == "startup"), None)
+        targets = [event for event in events if event["event"] == "target" and len(event.get("action", [])) >= 8]
+        metadata = {} if startup is None else startup.get("metadata", {})
+        key = (metadata.get("experiment"), metadata.get("step"))
+        if key[0] not in two_track.TRACKS or key[1] not in SNAPSHOT_STEPS or not targets:
+            ignored.append(str(path))
+            continue
+        value = {"path": str(path), "events": events, "targets": targets}
+        if key not in selected or len(targets) > len(selected[key]["targets"]):
+            if key in selected:
+                ignored.append(selected[key]["path"])
+            selected[key] = value
+        else:
+            ignored.append(str(path))
+    expected = {(track, step) for track in two_track.TRACKS for step in SNAPSHOT_STEPS}
+    if set(selected) != expected:
+        missing = sorted(expected - set(selected))
+        raise ContractError(f"missing correct-hand shadow logs: {missing}")
+    return selected, ignored
+
+
+def sweep_filter(campaign, shadow_root, output, *, hold_times=(0.1, 0.2, 0.3, 0.5)):
+    """CPU-only filter sweep over saved teacher-forced and scheduled shadow intents."""
+    campaign, output = Path(campaign).resolve(), Path(output).resolve()
+    manifest = two_track.verify_campaign(campaign)
+    shadows, ignored = _correct_hand_shadows(shadow_root)
+    rows = []
+    for hold in hold_times:
+        for track in two_track.TRACKS:
+            for step in SNAPSHOT_STEPS:
+                sidecar_path = campaign / "evaluations" / "intent_series" / f"{track}_{step:06d}.json"
+                sidecar = read_json(sidecar_path)
+                if (
+                    sidecar.get("schema") != "hv1_grasp_intent_series_v1"
+                    or sidecar.get("manifest_sha256") != manifest["sha256"]
+                    or sidecar.get("experiment") != track
+                    or sidecar.get("step") != step
+                    or len(sidecar.get("episodes", [])) != 12
+                ):
+                    raise ContractError(f"invalid intent sidecar: {sidecar_path}")
+                metrics = []
+                for episode in sidecar["episodes"]:
+                    filtered, _ = condition_intents(
+                        episode["predicted_grasp_intent"],
+                        fps=sidecar["fps"],
+                        min_hold_s=hold,
+                    )
+                    metrics.append(
+                        transition_metrics(
+                            filtered,
+                            episode["truth_grasp_intent"],
+                            episode["grasp_frames"],
+                            episode["release_frames"],
+                            fps=sidecar["fps"],
+                        )
+                    )
+                shadow = shadows[(track, step)]
+                targets = shadow["targets"]
+                times = np.asarray([float(event["monotonic"]) for event in targets])
+                times -= times[0]
+                _, shadow_events = condition_intents(
+                    [event["action"][7] for event in targets],
+                    times=times,
+                    min_hold_s=hold,
+                )
+                close_errors = [error for metric in metrics for error in metric["close_time_error_s"]]
+                missed_close = sum(metric["missed_close"] for metric in metrics)
+                extra_close = sum(metric["extra_close"] for metric in metrics)
+                missed_release = sum(metric["missed_release"] for metric in metrics)
+                extra_release = sum(metric["extra_release"] for metric in metrics)
+                shadow_close = sum(event["event"] == "close" for event in shadow_events)
+                max_abs_close_error = max(map(abs, close_errors), default=None)
+                rows.append(
+                    {
+                        "min_hold_s": hold,
+                        "experiment": track,
+                        "step": step,
+                        "missed_close": missed_close,
+                        "extra_close": extra_close,
+                        "missed_release": missed_release,
+                        "extra_release": extra_release,
+                        "median_close_time_error_s": float(np.median(close_errors)) if close_errors else None,
+                        "max_abs_close_time_error_s": max_abs_close_error,
+                        "shadow_false_close": shadow_close,
+                        "shadow_exposure_s": float(times[-1]) if len(times) else 0.0,
+                        "shadow_log": shadow["path"],
+                        "pass": missed_close == 0
+                        and extra_close == 0
+                        and shadow_close == 0
+                        and max_abs_close_error is not None
+                        and max_abs_close_error <= 0.3,
+                    }
+                )
+    common = [
+        hold
+        for hold in hold_times
+        if all(row["pass"] for row in rows if row["min_hold_s"] == hold)
+    ]
+    result = {
+        "schema": "hv1_grasp_filter_sweep_v1",
+        "manifest_sha256": manifest["sha256"],
+        "close_threshold": 0.7,
+        "open_threshold": 0.3,
+        "hold_times_s": list(hold_times),
+        "rows": rows,
+        "common_passing_hold_times_s": common,
+        "decision": "SUPERVISOR_SELECTION_REQUIRED" if common else "CONDITIONAL_TRAINING_CRITERION_MET",
+        "ignored_shadow_logs": ignored,
+        "robot_commands_sent": 0,
+        "closed_loop": False,
+    }
+    write_new_json(output, result)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["evaluate", "register", "compare"])
+    parser.add_argument("command", choices=["evaluate", "evaluate-intents", "register", "compare", "sweep-filter"])
     parser.add_argument("--campaign", required=True)
     parser.add_argument("--snapshot")
     parser.add_argument("--reference")
     parser.add_argument("--reviewer")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--allow-gpu-run", action="store_true")
+    parser.add_argument("--shadow-root")
+    parser.add_argument("--output")
     args = parser.parse_args()
-    if args.command == "evaluate":
+    if args.command in ("evaluate", "evaluate-intents"):
         if not args.allow_gpu_run or not args.snapshot:
             parser.error("--snapshot and --allow-gpu-run required")
-        result = evaluate(args.campaign, args.snapshot, reference=args.reference, smoke=args.smoke)
+        result = evaluate(
+            args.campaign,
+            args.snapshot,
+            reference=args.reference,
+            smoke=args.smoke,
+            intent_sidecar=args.command == "evaluate-intents",
+        )
     elif args.command == "register":
         if not args.snapshot or not args.reviewer:
             parser.error("--snapshot and --reviewer required")
         result = register(args.campaign, args.snapshot, args.reviewer)
-    else:
+    elif args.command == "compare":
         result = compare(args.campaign)
+    else:
+        if not args.shadow_root or not args.output:
+            parser.error("sweep-filter requires --shadow-root and --output")
+        result = sweep_filter(args.campaign, args.shadow_root, args.output)
     print(json.dumps(result))
 
 

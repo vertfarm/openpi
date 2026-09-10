@@ -27,6 +27,7 @@ from std_msgs.msg import String
 from .core import ARM_COMMAND
 from .core import ARM_STATE
 from .core import CAMERAS
+from .core import CORE_SOURCE_SHA256
 from .core import HAND_STATE
 from .core import ChunkQueue
 from .core import GripEdges
@@ -37,6 +38,7 @@ from .core import PolicyHTTP
 from .core import Rejected
 from .core import make_request
 from .core import named_positions
+from .core import validate_hand_envelope
 
 IMAGE_TOPICS = {
     "head": "/kh/upper_body/head/color/image_raw/compressed",
@@ -115,8 +117,20 @@ class DeployNode(Node):
             raise Rejected("deployment logs must stay outside immutable raw/dataset roots")
         self.output.mkdir(parents=True, exist_ok=False)
         self.log = JsonLog(self.output / "events.jsonl")
-        self.log.write("startup", mode=args.mode, metadata=self.metadata, profile=self.profile)
-        self.obs, self.chunks, self.grip = Observations(), ChunkQueue(), GripEdges()
+        self.grip_config = {
+            "close_threshold": args.grip_close_threshold,
+            "open_threshold": args.grip_open_threshold,
+            "min_hold_s": args.grip_min_hold,
+        }
+        self.log.write(
+            "startup",
+            mode=args.mode,
+            metadata=self.metadata,
+            profile=self.profile,
+            adapter_core_sha256=CORE_SOURCE_SHA256,
+            gripper_filter=self.grip_config,
+        )
+        self.obs, self.chunks, self.grip = Observations(), ChunkQueue(), GripEdges(**self.grip_config)
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.future = None
         self.sequence = 0
@@ -131,6 +145,7 @@ class DeployNode(Node):
         self.last_output = None
         self.hand_waits = []
         self.grasp_handle = None
+        self.deferred_open = False
         self.operator_server = None
         self.raw = RawFeedback(args.mqtt_host)
         qos = qos_profile_sensor_data
@@ -341,14 +356,19 @@ class DeployNode(Node):
             self.hand_waits.append(("accept", future, now + 1.0))
         elif event == "open":
             if any(kind in ("accept", "grasp") for kind, _, _ in self.hand_waits):
-                raise Rejected("release requested before grasp operation completed")
+                self.deferred_open = True
+                self.log.write("gripper_deferred", event_name="open", reason="grasp operation incomplete")
+                return
             if self.guard_status.get("release_allowed") is not True:
-                raise Rejected("release outside guardian-qualified tray condition")
+                self.deferred_open = True
+                self.log.write("gripper_deferred", event_name="open", reason="tray release not qualified")
+                return
             from kdex_3f_ros2_msgs.srv import SetOpen
 
             request = SetOpen.Request()
             request.open, request.speed = 0.6, 0.0
             self.hand_waits.append(("open", self.open_client.call_async(request), now + 1.0))
+            self.deferred_open = False
         if event:
             self.log.write("gripper_request", event_name=event, speed="existing_server_default")
 
@@ -374,9 +394,11 @@ class DeployNode(Node):
                     self.grasp_handle = None
                 self.log.write("gripper_result", kind=kind, success=True)
         self.hand_waits = remaining
+        if self.deferred_open and not remaining and self.guard_status.get("release_allowed") is True:
+            self.hand_event("open", now)
 
     def emit(self, due, action, state, now):
-        event = self.grip.update(float(action[7]))
+        event = self.grip.update(float(action[7]), now)
         if self.live:
             self.live_health(now, state)
             self.gate.check(
@@ -423,6 +445,7 @@ class DeployNode(Node):
             if self.fault:
                 return
             state, images, anchor, ages = self.obs.snapshot(now)
+            validate_hand_envelope(state[7:], self.metadata)
             # Model input may use a buffered state to align cameras. Physical
             # tracking checks must always use the newest measured state.
             current_state = np.r_[self.obs.entries["arm"][0], self.obs.entries["hand"][0]]
@@ -473,7 +496,8 @@ class DeployNode(Node):
                 # No robot output exists here. Recover as sensors become ready.
                 self.state = "DISARMED" if self.live else "WAITING"
                 self.chunks.clear()
-                self.grip = GripEdges()
+                self.grip = GripEdges(**self.grip_config)
+                self.deferred_open = False
                 if self.future and self.future[0].done():
                     self.future = None
                 self.log.write("waiting", reason=str(error))
@@ -514,6 +538,9 @@ def main():
     parser.add_argument("--profile")
     parser.add_argument("--output", required=True, help="new directory outside raw datasets")
     parser.add_argument("--seconds", type=float, default=60)
+    parser.add_argument("--grip-close-threshold", type=float, default=0.7)
+    parser.add_argument("--grip-open-threshold", type=float, default=0.3)
+    parser.add_argument("--grip-min-hold", type=float, default=0.2)
     args, ros_args = parser.parse_known_args()
     if args.mode == "live" and (not args.profile or not args.mqtt_host):
         parser.error("live requires field profile and raw MQTT observer")

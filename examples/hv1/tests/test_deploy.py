@@ -12,9 +12,12 @@ from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core impor
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import CAMERAS
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import CONTRACT
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import CONTRACT_SHA
+from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import CORE_SOURCE_SHA256
+from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import HAND_STATE
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import PROMPT
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import ChunkQueue
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import GripEdges
+from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import IntentConditioner
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import LiveGate
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import Observations
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import PolicyHTTP
@@ -22,6 +25,7 @@ from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core impor
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import make_request
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import named_positions
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import validate_metadata
+from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import validate_hand_envelope
 
 
 def metadata():
@@ -32,6 +36,8 @@ def metadata():
         action_horizon=15,
         denoise=10,
         snapshot_sha256="test-snapshot",
+        adapter_core_sha256=CORE_SOURCE_SHA256,
+        hand_state_envelope={"names": list(HAND_STATE), "q01": [-1.0] * 8, "q99": [1.0] * 8, "margin_rad": 0.05},
     )
 
 
@@ -91,6 +97,29 @@ def test_metadata_and_three_cameras():
         validate_metadata(bad)
     with pytest.raises(Rejected):
         make_request(0, np.zeros(15), {"head": b"x"})
+
+
+def test_metadata_rejects_runtime_code_mismatch():
+    bad = metadata()
+    bad["adapter_core_sha256"] = "different"
+    with pytest.raises(Rejected, match="source mismatch"):
+        validate_metadata(bad)
+
+
+def test_hand_envelope_allows_prepared_pose_but_rejects_home():
+    value = metadata()
+    value["hand_state_envelope"] = {
+        "names": list(HAND_STATE),
+        "q01": [1.549, -0.618, 0.828, -0.618, 0.828, 1.550, -0.617, 0.829],
+        "q99": [1.577, -0.607, 0.835, -0.605, 0.835, 1.554, -0.609, 0.832],
+        "margin_rad": 0.05,
+    }
+    prepared = [1.560, -0.612, 0.831, -0.612, 0.831, 1.543, -0.612, 0.831]
+    np.testing.assert_allclose(validate_hand_envelope(prepared, value), prepared)
+    with pytest.raises(Rejected, match="joint_10.*joint_30"):
+        validate_hand_envelope(np.zeros(8), value)
+    with pytest.raises(Rejected):
+        validate_hand_envelope([float("nan")] * 8, value)
 
 
 def observation():
@@ -169,7 +198,7 @@ def test_no_command_burst():
 
 
 def test_gripper_edges_not_joint_angles_or_torque():
-    edges = GripEdges()
+    edges = GripEdges(min_hold_s=0)
     assert edges.update(-0.1) is None
     assert edges.update(1.2) == "close"
     assert edges.update(0.8) is None
@@ -178,7 +207,19 @@ def test_gripper_edges_not_joint_angles_or_torque():
     with pytest.raises(Rejected):
         edges.update(0.9)
     with pytest.raises(Rejected):
-        GripEdges().update(float("nan"))
+        GripEdges(min_hold_s=0).update(float("nan"))
+
+
+def test_gripper_hysteresis_and_dwell_reject_short_pulses():
+    conditioned = IntentConditioner(close_threshold=0.7, open_threshold=0.3, min_hold_s=0.2)
+    assert conditioned.update(0.8, 0.0) is None
+    assert conditioned.update(0.1, 0.1) is None
+    assert conditioned.update(0.8, 0.2) is None
+    assert conditioned.update(0.9, 0.39) is None
+    assert conditioned.update(0.9, 0.4) == "close"
+    assert conditioned.update(0.5, 0.5) is None
+    assert conditioned.update(0.2, 0.6) is None
+    assert conditioned.update(0.2, 0.8) == "open"
 
 
 def test_unverified_live_profile_cannot_arm():
@@ -265,7 +306,8 @@ def test_loopback_http_actual_wire(monkeypatch):
     try:
         client = PolicyHTTP(server.server_port)
         assert client.metadata()["ready"]
-        request = make_request(9, np.arange(15), {c: b"test" for c in CAMERAS})
+        state = np.r_[np.arange(7), np.zeros(8)]
+        request = make_request(9, state, {c: b"test" for c in CAMERAS})
         actions, _ = client.infer(request, "test-snapshot")
         np.testing.assert_array_equal(actions[0], np.r_[np.arange(7), 1.0])
         request["contract_sha256"] = "wrong"

@@ -101,3 +101,16 @@ def test_transition_metrics_match_multiple_cycles_without_reordering():
     assert result["matched_release"] == [[345, 350], [805, 800]]
     assert result["missed_close"] == result["missed_release"] == 0
     assert result["extra_close"] == result["extra_release"] == 0
+
+
+def test_condition_intents_filters_pulse_and_preserves_sustained_transition():
+    raw = np.zeros(30, dtype=np.float32)
+    raw[3:5] = 1  # 67 ms pulse at 30 Hz.
+    raw[10:20] = 1
+    filtered, events = two_track_eval.condition_intents(raw, min_hold_s=0.2)
+    assert events == [
+        {"event": "close", "time_s": 16 / 30},
+        {"event": "open", "time_s": 26 / 30},
+    ]
+    assert not filtered[:16].any()
+    assert filtered[16:26].all()
