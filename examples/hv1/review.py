@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from PIL import Image
 
-from .workflow import ContractError
+from .artifacts import ContractError
 from .workflow import read_frame
 
 

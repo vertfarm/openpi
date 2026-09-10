@@ -16,21 +16,21 @@ import time
 
 import numpy as np
 
+from .artifacts import GIB
+from .artifacts import ContractError
+from .artifacts import atomic_json
+from .artifacts import digest
+from .artifacts import file_hash
+from .artifacts import read_json
+from .artifacts import storage_gate
+from .artifacts import write_new_json
+from .checkpoints import save_snapshot as save_snapshot
 from .native import PROMPT
 from .native import read_numeric
 from .openpi_run import make_config
-from .overnight_common import GIB
-from .overnight_common import atomic_json
-from .overnight_common import storage_gate
-from .overnight_common import tree_bytes
 from .overnight_common import verify_campaign
 from .transforms import HV1Inputs
 from .transforms import HV1Outputs
-from .workflow import ContractError
-from .workflow import digest
-from .workflow import file_hash
-from .workflow import read_json
-from .workflow import write_new_json
 
 
 def configure(campaign, r):
@@ -82,6 +82,8 @@ def configure(campaign, r):
             for n in (
                 "native.py",
                 "workflow.py",
+                "artifacts.py",
+                "checkpoints.py",
                 "transforms.py",
                 "overnight_common.py",
                 "overnight_train.py",
@@ -144,54 +146,6 @@ def stats(campaign):
             sha256=file_hash(root / "norm_stats.json"),
         ),
     )
-
-
-def save_snapshot(campaign, config, state, data_loader, step, metrics):
-    import jax
-    import jax.numpy as jnp
-    import orbax.checkpoint as ocp
-
-    from openpi.models.model import restore_params
-    from openpi.shared import normalize
-
-    campaign = Path(campaign)
-    final = campaign / "snapshots" / config.exp_name / f"step_{step:06d}"
-    if final.exists():
-        if (final / "snapshot.json").exists():
-            return final
-        raise ContractError("incomplete existing snapshot requires review")
-    storage_gate(campaign, 8 * GIB)
-    partial = final.with_name(final.name + ".partial")
-    partial.mkdir(parents=True, exist_ok=False)
-    # Transfer/cast on host. Do not allocate a second full model on the training GPU.
-    params = jax.tree.map(lambda x: np.asarray(jax.device_get(x)).astype(jnp.bfloat16), state.params.to_pure_dict())
-    with ocp.PyTreeCheckpointer() as saver:
-        saver.save(str(partial / "params"), {"params": params})
-    # Prove all serialized arrays round-trip, not only that a directory exists.
-    restored = restore_params(partial / "params", dtype=jnp.bfloat16)
-    left, right = jax.tree.leaves(params), jax.tree.leaves(restored)
-    if jax.tree.structure(params) != jax.tree.structure(restored) or not all(
-        np.array_equal(a, b) for a, b in zip(left, right, strict=True)
-    ):
-        raise ContractError("BF16 snapshot roundtrip mismatch")
-    data = data_loader.data_config()
-    normalize.save(partial / "assets" / data.asset_id, data.norm_stats)
-    hashes = {str(p.relative_to(partial)): file_hash(p) for p in sorted(partial.rglob("*")) if p.is_file()}
-    record = dict(
-        config.policy_metadata,
-        step=step,
-        checkpoint_dtype="bfloat16",
-        purpose="inference_not_optimizer_resume",
-        metrics=metrics,
-        files_sha256=hashes,
-        bytes=tree_bytes(partial),
-        cpu_roundtrip_pass=True,
-        gpu_reload_status="pending",
-        complete=True,
-    )
-    write_new_json(partial / "snapshot.json", record)
-    partial.rename(final)
-    return final
 
 
 def train(campaign, r, deadline, *, resume=False):

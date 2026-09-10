@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "approved": false,
+  "review_id": "",
+  "contract_sha256": "FILL_FROM_VERIFIED_SERVER_HEALTH",
+  "snapshot_sha256": "FILL_FROM_VERIFIED_SERVER_HEALTH",
+  "qualification_evidence": "",
+  "joint_min": null,
+  "joint_max": null,
+  "max_step": null,
+  "max_tracking_error": null,
+  "max_velocity": null,
+  "max_acceleration": null,
+  "start_q": null,
+  "start_tolerance": null,
+  "guardian_node": "/hv1_vla_guardian",
+  "stop_service": "",
+  "note": "실측/현장 승인 전 사용 불가. 텔레옵 배제·독립 watchdog·물리 정지·트레이 release 조건은 독립 guardian에서 검증해야 함."
+}

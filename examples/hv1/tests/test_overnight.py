@@ -48,6 +48,26 @@ def test_native_action_is_command_not_state(tmp_path):
     assert info["grasp_frame"] == 2 and info["release_frame"] == 4
 
 
+def test_native_preserves_multiple_gripper_cycles_when_authorized(tmp_path):
+    path = tmp_path / "data.hdf5"
+    fixture_native(path)
+    with h5py.File(path, "r+") as f:
+        f["action.hand.command_r"][:] = [
+            [2, 0.6],
+            [2, 0],
+            [2, 0.6],
+            [2, 0],
+            [2, 0],
+            [2, 0.6],
+        ]
+    with pytest.raises(ContractError):
+        read_numeric(path)
+    _, action, info = read_numeric(path, allow_multiple_cycles=True)
+    assert action[:, -1].tolist() == [0, 1, 0, 1, 1, 0]
+    assert info["grasp_frames"] == [1, 3]
+    assert info["release_frames"] == [2, 5]
+
+
 @pytest.mark.parametrize("damage", ["mode", "open", "stale", "timestamp", "nan", "cycle"])
 def test_native_rejects_invalid_fields(tmp_path, damage):
     path = tmp_path / "data.hdf5"
@@ -116,16 +136,16 @@ def test_real_orbax_bf16_roundtrip(tmp_path, monkeypatch):
     nnx = pytest.importorskip("flax.nnx")
     from types import SimpleNamespace
 
-    from examples.hv1 import overnight_train
+    from examples.hv1 import checkpoints
     from openpi.shared.normalize import NormStats
 
-    monkeypatch.setattr(overnight_train, "storage_gate", lambda *args: None)
+    monkeypatch.setattr(checkpoints, "storage_gate", lambda *args: None)
     params = nnx.State({"weight": nnx.Param(jax.numpy.asarray([[1.2345, 2.1], [3.2, 4.3]]))})
     config = SimpleNamespace(exp_name="test", policy_metadata={"recipe": recipe("A", 50)})
     norm = NormStats(mean=np.zeros(2), std=np.ones(2), q01=np.zeros(2), q99=np.ones(2))
     data = SimpleNamespace(asset_id="test", norm_stats={"state": norm})
     loader = SimpleNamespace(data_config=lambda: data)
-    result = overnight_train.save_snapshot(tmp_path, config, SimpleNamespace(params=params), loader, 50, {"loss": 0.1})
+    result = checkpoints.save_snapshot(tmp_path, config, SimpleNamespace(params=params), loader, 50, {"loss": 0.1})
     report = json.loads((result / "snapshot.json").read_text())
     assert report["cpu_roundtrip_pass"] and report["complete"]
     assert report["checkpoint_dtype"] == "bfloat16"

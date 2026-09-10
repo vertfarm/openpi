@@ -5,12 +5,12 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .workflow import ContractError
+from .artifacts import ContractError
+from .artifacts import file_hash
+from .artifacts import write_new_json
 from .workflow import dataset
-from .workflow import file_hash
 from .workflow import load_manifest
 from .workflow import sampling_plan
-from .workflow import write_new_json
 
 
 def export_manifest(manifest_path, destination, *, allow_synthetic=False):

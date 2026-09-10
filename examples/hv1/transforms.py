@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .workflow import ContractError
+from .artifacts import ContractError
 from .workflow import validate_profile
 
 CAMERA_KEYS = {"head": "base_0_rgb", "hand_l": "left_wrist_0_rgb", "hand_r": "right_wrist_0_rgb"}

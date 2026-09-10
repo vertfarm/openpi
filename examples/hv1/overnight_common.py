@@ -1,41 +1,20 @@
-"""Small, testable campaign contracts. No model or robot imports."""
+"""Recipes and frozen cohort checks for the completed A-F campaign.
+
+Artifact helpers remain re-exported for compatibility; new code uses artifacts.
+"""
 
 from __future__ import annotations
 
-import json
 import math
-import os
 from pathlib import Path
-import shutil
 
-from .workflow import ContractError
-from .workflow import read_json
-
-GIB = 1024**3
-MIN_FREE = 50 * GIB
-
-
-def atomic_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + f".partial-{os.getpid()}")
-    with temporary.open("x") as f:
-        json.dump(value, f, indent=2, allow_nan=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temporary, path)
-
-
-def storage_gate(root, write_bytes=0):
-    free = shutil.disk_usage(root).free
-    if free < MIN_FREE + write_bytes:
-        raise ContractError(
-            f"disk budget: free={free / GIB:.1f}GiB need={(MIN_FREE + write_bytes) / GIB:.1f}GiB; no raw cleanup"
-        )
-
-
-def tree_bytes(root):
-    return sum(p.stat().st_size for p in Path(root).rglob("*") if p.is_file())
+from .artifacts import GIB as GIB
+from .artifacts import MIN_FREE as MIN_FREE
+from .artifacts import ContractError
+from .artifacts import atomic_json as atomic_json
+from .artifacts import read_json
+from .artifacts import storage_gate as storage_gate
+from .artifacts import tree_bytes as tree_bytes
 
 
 def snapshot_steps(name, target):

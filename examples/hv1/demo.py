@@ -5,7 +5,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .workflow import write_new_json
+from .artifacts import write_new_json
 
 
 def make_demo(destination):

@@ -3,8 +3,8 @@
 import argparse
 import json
 
+from .artifacts import read_json
 from .workflow import Catalog
-from .workflow import read_json
 
 
 def main():

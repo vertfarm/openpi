@@ -14,9 +14,9 @@ import xml.etree.ElementTree as ET
 
 import yaml
 
-from .workflow import ContractError
-from .workflow import file_hash
-from .workflow import write_new_json
+from .artifacts import ContractError
+from .artifacts import file_hash
+from .artifacts import write_new_json
 
 KH = "ros2/kh_ws/src/"
 HAND = "ros2/hand_ws/src/kdex_3f/"

@@ -5,14 +5,14 @@ from pathlib import Path
 
 import numpy as np
 
+from .artifacts import ContractError
+from .artifacts import read_json
+from .artifacts import write_new_json
 from .native import PROMPT
 from .native import read_numeric
 from .overnight_common import recipe
 from .overnight_train import configure
 from .transforms import HV1Outputs
-from .workflow import ContractError
-from .workflow import read_json
-from .workflow import write_new_json
 
 
 def check(campaign, name):

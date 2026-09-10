@@ -6,13 +6,13 @@ from pathlib import Path
 import re
 import shutil
 
+from .artifacts import ContractError
+from .artifacts import digest
+from .artifacts import read_json
+from .artifacts import write_new_json
 from .transforms import HV1Inputs
 from .transforms import HV1Outputs
-from .workflow import ContractError
-from .workflow import digest
-from .workflow import read_json
 from .workflow import validate_profile
-from .workflow import write_new_json
 
 
 def make_config(export_path, runtime, experiment, *, steps=20):

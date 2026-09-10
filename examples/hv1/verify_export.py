@@ -7,11 +7,11 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .workflow import ContractError
+from .artifacts import ContractError
+from .artifacts import file_hash
+from .artifacts import read_json
 from .workflow import dataset
-from .workflow import file_hash
 from .workflow import load_manifest
-from .workflow import read_json
 from .workflow import sampling_plan
 
 

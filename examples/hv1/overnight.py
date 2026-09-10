@@ -11,15 +11,15 @@ import subprocess
 import sys
 import time
 
-from .overnight_common import atomic_json
+from .artifacts import ContractError
+from .artifacts import atomic_json
+from .artifacts import read_json
+from .artifacts import storage_gate
+from .artifacts import tree_bytes
+from .artifacts import write_new_json
 from .overnight_common import recipe
 from .overnight_common import select_target
-from .overnight_common import storage_gate
-from .overnight_common import tree_bytes
 from .overnight_common import verify_campaign
-from .workflow import ContractError
-from .workflow import read_json
-from .workflow import write_new_json
 
 TRAIN_END = "2026-09-10T09:30:00+09:00"
 END = "2026-09-10T10:00:00+09:00"
@@ -212,13 +212,13 @@ def execute(campaign, name, target, batch, *, smoke=False, resume_campaign=False
 
 
 def main():
-    from filelock import FileLock
-
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--campaign", required=True)
     p.add_argument("--after-smoke", action="store_true")
     p.add_argument("--resume-campaign", action="store_true")
     a = p.parse_args()
+    from filelock import FileLock
+
     campaign = Path(a.campaign).resolve()
     verify_campaign(campaign)
     stop = datetime.fromisoformat(TRAIN_END).timestamp()

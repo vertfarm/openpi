@@ -7,7 +7,6 @@ Only explicit raw roots are scanned; no ROS/controller modules are imported.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -17,37 +16,11 @@ import time
 import h5py
 import numpy as np
 
-
-class ContractError(ValueError):
-    pass
-
-
-def digest(value):
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-    ).hexdigest()
-
-
-def file_hash(path):
-    result = hashlib.sha256()
-    with Path(path).open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            result.update(block)
-    return result.hexdigest()
-
-
-def write_new_json(path, value):
-    """Never replace a manifest/profile or source file accidentally."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8") as target:
-        json.dump(value, target, ensure_ascii=False, indent=2, allow_nan=False)
-        target.write("\n")
-
-
-def read_json(path):
-    with Path(path).open(encoding="utf-8") as source:
-        return json.load(source)
+from .artifacts import ContractError as ContractError
+from .artifacts import digest as digest
+from .artifacts import file_hash as file_hash
+from .artifacts import read_json as read_json
+from .artifacts import write_new_json as write_new_json
 
 
 def validate_profile(p):

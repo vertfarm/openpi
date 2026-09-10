@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .workflow import ContractError
+from .artifacts import ContractError
 
 
 def named_positions(names, positions, required_names):

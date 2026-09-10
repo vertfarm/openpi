@@ -9,8 +9,8 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-from .workflow import ContractError
-from .workflow import digest
+from .artifacts import ContractError
+from .artifacts import digest
 from .workflow import validate_profile
 
 

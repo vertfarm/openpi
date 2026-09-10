@@ -10,12 +10,12 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .workflow import ContractError
-from .workflow import digest
-from .workflow import file_hash
-from .workflow import read_json
+from .artifacts import ContractError
+from .artifacts import digest
+from .artifacts import file_hash
+from .artifacts import read_json
+from .artifacts import write_new_json
 from .workflow import validate_profile
-from .workflow import write_new_json
 
 PROMPT = "Pick up the silver cylindrical part from the table with the right hand and place it on the tray."
 DUMMIES = {"episode_000000", "episode_000001"}
@@ -40,7 +40,10 @@ HAND_STATE = [f"position/joint_{i}" for i in (10, 11, 12, 21, 22, 30, 31, 32)]
 
 def profile():
     clock = "recorder_row_alignment_not_sensor_exposure_time"
-    stream = lambda path: dict(path=path, timestamps_ns="derived_recorder_row_ns", clock_domain=clock)
+
+    def stream(path):
+        return dict(path=path, timestamps_ns="derived_recorder_row_ns", clock_domain=clock)
+
     p = dict(
         schema_version=1,
         status="confirmed",
@@ -85,7 +88,7 @@ def select_columns(f, key, names, labels):
     return f[key][:][:, [declared.index(n) for n in names]].astype(np.float32)
 
 
-def read_numeric(path):
+def read_numeric(path, *, allow_multiple_cycles=False):
     with h5py.File(path, "r") as f:
         attrs = f["meta"].attrs
         labels = json.loads(attrs["labels"])
@@ -109,14 +112,24 @@ def read_numeric(path):
         state = np.concatenate((q, hand), axis=1)
         action = np.concatenate((command, np.isclose(grip[:, 1:2], 0, atol=1e-4).astype(np.float32)), axis=1)
         changes = np.r_[0, 1 + np.flatnonzero(np.diff(action[:, -1]) != 0)]
-        if action[changes, -1].tolist() != [0, 1, 0]:
+        intents = action[changes, -1].astype(int).tolist()
+        if not intents or intents[0] != 0 or intents[-1] != 0 or any(a == b for a, b in zip(intents, intents[1:])):
+            raise ContractError("expected an open-start/open-end alternating grasp sequence")
+        if not allow_multiple_cycles and intents != [0, 1, 0]:
             raise ContractError("expected one open/close/release cycle")
+        close_frames = [int(frame) for frame, intent in zip(changes, intents, strict=True) if intent == 1]
+        release_frames = [int(frame) for frame, intent in zip(changes, intents, strict=True) if intent == 0][1:]
+        if not close_frames or len(close_frames) != len(release_frames):
+            raise ContractError("unpaired grasp/release events")
         info = dict(
             frames=len(ts),
             created_at=str(attrs["created_at"]),
             max_command_step_rad=float(np.max(np.abs(np.diff(command, axis=0)))),
-            grasp_frame=int(changes[1]),
-            release_frame=int(changes[2]),
+            grasp_frame=close_frames[0],
+            release_frame=release_frames[-1],
+            grasp_frames=close_frames,
+            release_frames=release_frames,
+            gripper_events=[dict(frame=int(frame), intent=int(intent)) for frame, intent in zip(changes, intents, strict=True)],
             stale_rows=0,
             row_timestamp_seconds=ts.tolist(),
             source_stamp_ns=f["stamp_ns"][:].tolist(),

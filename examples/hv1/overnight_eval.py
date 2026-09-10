@@ -11,13 +11,13 @@ import time
 
 import numpy as np
 
+from .artifacts import ContractError
+from .artifacts import atomic_json
+from .artifacts import read_json
+from .checkpoints import snapshot_identity
 from .native import CAMERAS
 from .native import PROMPT
-from .overnight_common import atomic_json
 from .overnight_train import configure
-from .workflow import ContractError
-from .workflow import file_hash
-from .workflow import read_json
 
 
 def metrics(pred, truth, state, elapsed):
@@ -37,7 +37,7 @@ def evaluate(campaign, snapshot, *, reference=None, quick=False, deadline=None):
     campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
     if not snapshot.is_relative_to(campaign / "snapshots"):
         raise ContractError("snapshot outside campaign")
-    record = read_json(snapshot / "snapshot.json")
+    record = snapshot_identity(snapshot)
     config, export = configure(campaign, record["recipe"])
     from filelock import FileLock
     import jax
@@ -48,10 +48,6 @@ def evaluate(campaign, snapshot, *, reference=None, quick=False, deadline=None):
     from openpi.shared import nnx_utils
     from openpi.training import data_loader
 
-    for name, sha in record["files_sha256"].items():
-        p = (snapshot / name).resolve()
-        if not p.is_relative_to(snapshot) or file_hash(p) != sha:
-            raise ContractError("snapshot hash mismatch")
     data = config.data.create(config.assets_dirs, config.model)
     valdata = dataclasses.replace(data, repo_id=export["splits"]["validation"]["repo_id"])
     dataset = data_loader.create_torch_dataset(valdata, config.model.action_horizon, config.model)
