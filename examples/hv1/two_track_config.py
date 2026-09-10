@@ -11,6 +11,7 @@ from .artifacts import ContractError
 from .artifacts import digest
 from .artifacts import file_hash
 from .artifacts import read_json
+from .checkpoints import snapshot_identity
 from .native import PROMPT
 from .openpi_run import make_config
 
@@ -40,11 +41,7 @@ def local_dataset(data, model, root):
 def configure(campaign, recipe):
     campaign = Path(campaign).resolve()
     manifest = two_track.verify_campaign(campaign)
-    expected = two_track.recipe(
-        recipe["name"],
-        manifest["sha256"],
-        50 if recipe["name"] == "SMOKE" else two_track.TARGET_STEPS,
-    )
+    expected = two_track.recipe(recipe["name"], manifest["sha256"], recipe["steps"])
     if recipe != expected:
         raise ContractError("recipe differs from the approved two-track plan")
     export = read_json(campaign / "export/export.json")
@@ -74,6 +71,23 @@ def configure(campaign, recipe):
         or provenance.get("norm_stats_sha256") != file_hash(stats_path)
     ):
         raise ContractError("track normalization identity mismatch")
+    parent_record = None
+    if recipe.get("parent"):
+        parent = (campaign / recipe["parent"]["snapshot"]).resolve()
+        if not parent.is_relative_to(campaign / "snapshots"):
+            raise ContractError("filter fine-tune parent escapes campaign snapshots")
+        parent_record = snapshot_identity(parent)
+        parent_recipe = parent_record.get("recipe", {})
+        if (
+            parent_recipe.get("name") != recipe["parent"]["experiment"]
+            or parent_record.get("step") != recipe["parent"]["step"]
+            or parent_record.get("manifest_sha256") != manifest["sha256"]
+            or parent_record.get("norm_stats_sha256") != provenance["norm_stats_sha256"]
+        ):
+            raise ContractError("filter fine-tune parent lineage/statistics mismatch")
+        weight_loader = CheckpointWeightLoader(str(parent / "params"))
+    else:
+        weight_loader = CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params")
     metadata = dict(
         config.policy_metadata,
         campaign_schema=two_track.SCHEMA,
@@ -90,7 +104,10 @@ def configure(campaign, recipe):
         norm_stats_sha256=file_hash(stats_path),
         normalization_asset_id=asset_id,
         validation_scope="training_overlap_diagnostics_only",
-        initialization="official_pi05_base_new_optimizer",
+        initialization=recipe["initialization"],
+        parent_snapshot=None if parent_record is None else recipe["parent"]["snapshot"],
+        parent_snapshot_sha256=None if parent_record is None else file_hash(parent / "snapshot.json"),
+        parent_updates=0 if parent_record is None else parent_record["step"],
         robot_motion_authorized=False,
         export_roots={"train": export["splits"]["train"]["root"]},
         implementation_sha256={
@@ -116,7 +133,7 @@ def configure(campaign, recipe):
             config.data,
             assets=AssetsConfig(assets_dir=str(campaign / "assets"), asset_id=asset_id),
         ),
-        weight_loader=CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        weight_loader=weight_loader,
         freeze_filter=config.model.get_freeze_filter(),
         batch_size=recipe["batch_size"],
         seed=recipe["seed"],

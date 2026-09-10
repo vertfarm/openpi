@@ -21,6 +21,11 @@ from .artifacts import write_new_json
 
 SCHEMA = "hv1_two_track_v1"
 TRACKS = ("TODAY30", "ALL59")
+FILTER_FINETUNES = ("TODAY30_FT", "ALL59_FT")
+FILTER_PARENT = {
+    "TODAY30_FT": ("TODAY30", 1000),
+    "ALL59_FT": ("ALL59", 2000),
+}
 OLD_SESSION = "keti_humanoid_data_260909"
 TODAY_SESSION = "keti_humanoid_data_260910"
 OLD_EXCLUDED = {"episode_000000", "episode_000001", "episode_000033"}
@@ -311,37 +316,69 @@ def compute_statistics(campaign, track):
 
 
 def recipe(name, manifest_sha, steps=TARGET_STEPS):
-    if name not in {*TRACKS, "SMOKE"}:
+    if name not in {*TRACKS, *FILTER_FINETUNES, "SMOKE"}:
         raise ContractError("unknown two-track experiment")
-    if steps != (50 if name == "SMOKE" else TARGET_STEPS):
+    expected_steps = (
+        50 if name == "SMOKE" else 1000 if name in FILTER_FINETUNES else TARGET_STEPS
+    )
+    if steps != expected_steps:
         raise ContractError("recipe step count differs from the approved two-track plan")
-    snapshots = [50] if name == "SMOKE" else [250, 500, 1000, TARGET_STEPS]
-    return dict(
+    snapshots = (
+        [50]
+        if name == "SMOKE"
+        else [500, 1000]
+        if name in FILTER_FINETUNES
+        else [250, 500, 1000, TARGET_STEPS]
+    )
+    track = (
+        "TODAY30"
+        if name == "SMOKE"
+        else FILTER_PARENT[name][0]
+        if name in FILTER_PARENT
+        else name
+    )
+    parent = None
+    if name in FILTER_PARENT:
+        parent_track, parent_step = FILTER_PARENT[name]
+        parent = {
+            "experiment": parent_track,
+            "step": parent_step,
+            "snapshot": f"snapshots/{parent_track}/step_{parent_step:06d}",
+        }
+    value = dict(
         name=name,
-        track="TODAY30" if name == "SMOKE" else name,
+        track=track,
         steps=steps,
         batch_size=2,
         seed=42,
         manifest_sha256=manifest_sha,
-        peak_lr=1e-5,
-        decay_lr=1e-6,
-        warmup_steps=100,
-        decay_steps=5000,
+        peak_lr=2.5e-6 if name in FILTER_FINETUNES else 1e-5,
+        decay_lr=2.5e-7 if name in FILTER_FINETUNES else 1e-6,
+        warmup_steps=50 if name in FILTER_FINETUNES else 100,
+        decay_steps=1000 if name in FILTER_FINETUNES else 5000,
         action_horizon=15,
         lora=False,
         ema_decay=None,
         phase_fractions={"uniform": 0.70, "close": 0.15, "release": 0.15},
         snapshots=snapshots,
-        initialization="official_pi05_base_new_optimizer",
+        initialization=(
+            "BF16_parent_weights_FP32_training_new_optimizer"
+            if name in FILTER_FINETUNES
+            else "official_pi05_base_new_optimizer"
+        ),
         inference_snapshots_priority=True,
         robot_motion_authorized=False,
     )
+    if parent is not None:
+        value["parent"] = parent
+    return value
 
 
 def sample_schedule(manifest, name, samples):
     if samples <= 0 or samples % 100:
         raise ContractError("sample count must be a positive multiple of 100")
-    recipe_value = recipe(name, manifest["sha256"], 50 if name == "SMOKE" else TARGET_STEPS)
+    steps = 50 if name == "SMOKE" else 1000 if name in FILTER_FINETUNES else TARGET_STEPS
+    recipe_value = recipe(name, manifest["sha256"], steps)
     selected = track_ids(manifest, recipe_value["track"])
     offsets, start = {}, 0
     for episode in manifest["episodes"]:
@@ -421,6 +458,18 @@ def write_schedules(campaign):
     return result
 
 
+def write_filter_finetune_schedules(campaign):
+    campaign = Path(campaign).resolve()
+    manifest = verify_campaign(campaign)
+    result = {}
+    for name in FILTER_FINETUNES:
+        value = recipe(name, manifest["sha256"], 1000)
+        schedule = sample_schedule(manifest, name, value["steps"] * value["batch_size"])
+        write_new_json(campaign / f"sampler_{name}.json", schedule)
+        result[name] = dict(samples=schedule["samples"], sha256=schedule["sha256"])
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -428,7 +477,7 @@ def main():
     command.add_argument("--old", required=True)
     command.add_argument("--today", required=True)
     command.add_argument("--campaign", required=True)
-    for name in ("export", "stats", "schedules", "status"):
+    for name in ("export", "stats", "schedules", "filter-schedules", "status"):
         command = sub.add_parser(name)
         command.add_argument("--campaign", required=True)
         if name == "stats":
@@ -442,6 +491,8 @@ def main():
         result = compute_statistics(args.campaign, args.track)
     elif args.command == "schedules":
         result = write_schedules(args.campaign)
+    elif args.command == "filter-schedules":
+        result = write_filter_finetune_schedules(args.campaign)
     else:
         campaign = Path(args.campaign)
         result = dict(

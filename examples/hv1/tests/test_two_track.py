@@ -114,3 +114,17 @@ def test_condition_intents_filters_pulse_and_preserves_sustained_transition():
     ]
     assert not filtered[:16].any()
     assert filtered[16:26].all()
+
+
+def test_filter_finetune_recipe_is_parented_and_low_rate():
+    recipe = two_track.recipe("TODAY30_FT", "manifest", 1000)
+    assert recipe["track"] == "TODAY30"
+    assert recipe["parent"] == {
+        "experiment": "TODAY30",
+        "step": 1000,
+        "snapshot": "snapshots/TODAY30/step_001000",
+    }
+    assert recipe["peak_lr"] == 2.5e-6
+    assert recipe["warmup_steps"] == 50
+    assert recipe["snapshots"] == [500, 1000]
+    assert recipe["initialization"] == "BF16_parent_weights_FP32_training_new_optimizer"

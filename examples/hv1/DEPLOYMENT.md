@@ -176,3 +176,11 @@ python -B -m examples.hv1.two_track_eval sweep-filter \
 않고, 필터 결과만으로 체크포인트를 자동 선정하거나 ARM하지 않는다. 야간 build 뒤에는
 ROS 노드를 띄우는 대신 `ros2 pkg prefix`, Python import 경로, `core.py` SHA-256만
 기록한다. live shadow와 실기는 감독자가 있는 시간에 다시 수행한다.
+
+사전에 승인된 판정 기준을 만족하는 기존 조합이 하나도 없을 때만 조건부 저학습률
+fine-tune을 허용한다. `TODAY30_FT`는 TODAY30-1000, `ALL59_FT`는 ALL59-2000의
+BF16 가중치에서 각각 독립적으로 시작하며 optimizer는 새로 만든다. 데이터·정규화
+통계·70/15/15 sampler는 부모 트랙과 동일하고 peak LR 2.5e-6, warmup 50,
+최대 1,000 update다. 현장 디스크의 50 GiB 하한을 지키기 위해 +500/+1000 추론본만
+보존하고 optimizer 재시작 상태는 저장하지 않는다. 새 모델도 teacher-forced intent와
+저장된 correct-hand 관측 재생을 모두 통과하기 전에는 registry나 배포 후보로 올리지 않는다.

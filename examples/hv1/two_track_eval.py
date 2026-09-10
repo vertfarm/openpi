@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -117,11 +118,7 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False, intent_sidecar=
         raise ContractError("snapshot is outside the two-track campaign")
     record = snapshot_identity(snapshot)
     recipe = record["recipe"]
-    if recipe != two_track.recipe(
-        recipe["name"],
-        manifest["sha256"],
-        50 if recipe["name"] == "SMOKE" else two_track.TARGET_STEPS,
-    ):
+    if recipe != two_track.recipe(recipe["name"], manifest["sha256"], recipe["steps"]):
         raise ContractError("snapshot recipe/manifest lineage mismatch")
     if smoke != (recipe["name"] == "SMOKE"):
         raise ContractError("smoke evaluation flag/recipe mismatch")
@@ -421,6 +418,101 @@ def _correct_hand_shadows(root):
     return selected, ignored
 
 
+def evaluate_static_intents(campaign, snapshot, shadow_log):
+    """Run a fine-tuned policy on saved correct-hand observations without ROS."""
+    campaign, snapshot, shadow_log = map(
+        lambda value: Path(value).resolve(), (campaign, snapshot, shadow_log)
+    )
+    manifest = two_track.verify_campaign(campaign)
+    if not snapshot.is_relative_to(campaign / "snapshots") or not shadow_log.is_relative_to(campaign / "shadow"):
+        raise ContractError("snapshot/static shadow evidence must stay inside the campaign")
+    record = snapshot_identity(snapshot)
+    recipe = record["recipe"]
+    if (
+        recipe.get("name") not in two_track.FILTER_FINETUNES
+        or recipe != two_track.recipe(recipe["name"], manifest["sha256"], recipe["steps"])
+    ):
+        raise ContractError("static replay requires a filter fine-tune snapshot")
+    events = _read_events(shadow_log)
+    startup = next((event for event in events if event["event"] == "startup"), None)
+    targets = [event for event in events if event["event"] == "target"]
+    if not startup or not targets:
+        raise ContractError("static shadow evidence lacks startup/target events")
+    parent = recipe["parent"]
+    metadata = startup.get("metadata", {})
+    if metadata.get("experiment") != parent["experiment"] or metadata.get("step") != parent["step"]:
+        raise ContractError("static shadow log does not match the fine-tune parent")
+    predictions = {}
+    config, _ = configure(campaign, recipe)
+    from filelock import FileLock
+    from openpi.policies.policy_config import create_trained_policy
+    from .deploy_server import prepare_images
+
+    sequences = sorted({int(event["prediction"]["sequence"]) for event in targets})
+    with FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0):
+        policy = create_trained_policy(config, snapshot, default_prompt=PROMPT, sample_kwargs={"num_steps": 10})
+        for sequence in sequences:
+            path = shadow_log.parent / f"observation_{sequence:06d}.npz"
+            if not path.is_file():
+                raise ContractError(f"missing static observation: {path}")
+            with np.load(path, allow_pickle=False) as saved:
+                state = np.asarray(saved["state"], dtype=np.float32)
+                if state.shape != (15,) or not np.isfinite(state).all():
+                    raise ContractError("invalid saved static state")
+                payload = {
+                    "images": {
+                        camera: base64.b64encode(np.asarray(saved[camera], dtype=np.uint8).tobytes()).decode("ascii")
+                        for camera in CAMERAS
+                    },
+                    "image_encoding": "ros_compressed",
+                }
+            images = prepare_images(payload)
+            noise = np.random.default_rng(900_000 + sequence).normal(size=(15, 32)).astype(np.float32)
+            actions = np.asarray(
+                policy.infer(
+                    {"state": state, "images": images, "prompt": PROMPT}, noise=noise
+                )["actions"]
+            )
+            if actions.shape != (15, 8) or not np.isfinite(actions).all():
+                raise ContractError("invalid static replay prediction")
+            predictions[sequence] = actions
+    times, intents = [], []
+    for target in targets:
+        prediction = target["prediction"]
+        sequence, model_index = int(prediction["sequence"]), int(prediction["model_index"])
+        if sequence not in predictions or not 0 <= model_index < 15:
+            raise ContractError("invalid static target provenance")
+        times.append(float(target["monotonic"]))
+        intents.append(float(predictions[sequence][model_index, 7]))
+    times = (np.asarray(times) - times[0]).tolist()
+    value = {
+        "schema": "hv1_static_grasp_intent_series_v1",
+        "manifest_sha256": manifest["sha256"],
+        "snapshot": str(snapshot),
+        "snapshot_sha256": file_hash(snapshot / "snapshot.json"),
+        "experiment": recipe["name"],
+        "step": record["step"],
+        "parent_shadow_log": str(shadow_log),
+        "source_experiment": metadata["experiment"],
+        "source_step": metadata["step"],
+        "times_s": times,
+        "predicted_grasp_intent": intents,
+        "inference_sequences": len(sequences),
+        "targets": len(targets),
+        "robot_commands_sent": 0,
+        "closed_loop": False,
+    }
+    directory = campaign / "evaluations" / "static_intent_series"
+    path = directory / f"{recipe['name']}_{record['step']:06d}.json"
+    write_new_json(path, value)
+    return {
+        "complete": True,
+        "static_intent_sidecar": str(path),
+        "targets": len(targets),
+        "robot_commands_sent": 0,
+    }
+
+
 def sweep_filter(campaign, shadow_root, output, *, hold_times=(0.1, 0.2, 0.3, 0.5)):
     """CPU-only filter sweep over saved teacher-forced and scheduled shadow intents."""
     campaign, output = Path(campaign).resolve(), Path(output).resolve()
@@ -515,9 +607,107 @@ def sweep_filter(campaign, shadow_root, output, *, hold_times=(0.1, 0.2, 0.3, 0.
     return result
 
 
+def sweep_filter_finetunes(campaign, output, *, hold_times=(0.1, 0.2, 0.3, 0.5)):
+    """CPU-only sweep for the conditional parent-warm-start snapshots."""
+    campaign, output = Path(campaign).resolve(), Path(output).resolve()
+    manifest = two_track.verify_campaign(campaign)
+    rows = []
+    for hold in hold_times:
+        for experiment in two_track.FILTER_FINETUNES:
+            for step in (500, 1000):
+                teacher = read_json(
+                    campaign
+                    / "evaluations"
+                    / "intent_series"
+                    / f"{experiment}_{step:06d}.json"
+                )
+                static = read_json(
+                    campaign / "evaluations" / "static_intent_series" / f"{experiment}_{step:06d}.json"
+                )
+                if (
+                    teacher.get("schema") != "hv1_grasp_intent_series_v1"
+                    or static.get("schema") != "hv1_static_grasp_intent_series_v1"
+                    or teacher.get("manifest_sha256") != manifest["sha256"]
+                    or static.get("manifest_sha256") != manifest["sha256"]
+                    or teacher.get("experiment") != experiment
+                    or static.get("experiment") != experiment
+                    or teacher.get("step") != step
+                    or static.get("step") != step
+                ):
+                    raise ContractError("filter fine-tune intent evidence identity mismatch")
+                metrics = []
+                for episode in teacher["episodes"]:
+                    filtered, _ = condition_intents(
+                        episode["predicted_grasp_intent"], fps=teacher["fps"], min_hold_s=hold
+                    )
+                    metrics.append(
+                        transition_metrics(
+                            filtered,
+                            episode["truth_grasp_intent"],
+                            episode["grasp_frames"],
+                            episode["release_frames"],
+                            fps=teacher["fps"],
+                        )
+                    )
+                _, static_events = condition_intents(
+                    static["predicted_grasp_intent"], times=static["times_s"], min_hold_s=hold
+                )
+                close_errors = [error for metric in metrics for error in metric["close_time_error_s"]]
+                missed_close = sum(metric["missed_close"] for metric in metrics)
+                extra_close = sum(metric["extra_close"] for metric in metrics)
+                shadow_false_close = sum(event["event"] == "close" for event in static_events)
+                max_error = max(map(abs, close_errors), default=None)
+                rows.append(
+                    {
+                        "min_hold_s": hold,
+                        "experiment": experiment,
+                        "step": step,
+                        "missed_close": missed_close,
+                        "extra_close": extra_close,
+                        "missed_release": sum(metric["missed_release"] for metric in metrics),
+                        "extra_release": sum(metric["extra_release"] for metric in metrics),
+                        "median_close_time_error_s": float(np.median(close_errors)) if close_errors else None,
+                        "max_abs_close_time_error_s": max_error,
+                        "shadow_false_close": shadow_false_close,
+                        "static_targets": static["targets"],
+                        "pass": missed_close == 0
+                        and extra_close == 0
+                        and shadow_false_close == 0
+                        and max_error is not None
+                        and max_error <= 0.3,
+                    }
+                )
+    passing = [row for row in rows if row["pass"]]
+    result = {
+        "schema": "hv1_grasp_filter_finetune_sweep_v1",
+        "manifest_sha256": manifest["sha256"],
+        "close_threshold": 0.7,
+        "open_threshold": 0.3,
+        "hold_times_s": list(hold_times),
+        "rows": rows,
+        "passing": passing,
+        "decision": "SUPERVISOR_SELECTION_REQUIRED" if passing else "FILTER_FINETUNE_DID_NOT_MEET_CRITERIA",
+        "robot_commands_sent": 0,
+        "closed_loop": False,
+    }
+    write_new_json(output, result)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["evaluate", "evaluate-intents", "register", "compare", "sweep-filter"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "evaluate",
+            "evaluate-intents",
+            "evaluate-static",
+            "register",
+            "compare",
+            "sweep-filter",
+            "sweep-filter-finetunes",
+        ],
+    )
     parser.add_argument("--campaign", required=True)
     parser.add_argument("--snapshot")
     parser.add_argument("--reference")
@@ -526,6 +716,7 @@ def main():
     parser.add_argument("--allow-gpu-run", action="store_true")
     parser.add_argument("--shadow-root")
     parser.add_argument("--output")
+    parser.add_argument("--static-log")
     args = parser.parse_args()
     if args.command in ("evaluate", "evaluate-intents"):
         if not args.allow_gpu_run or not args.snapshot:
@@ -537,16 +728,24 @@ def main():
             smoke=args.smoke,
             intent_sidecar=args.command == "evaluate-intents",
         )
+    elif args.command == "evaluate-static":
+        if not args.allow_gpu_run or not args.snapshot or not args.static_log:
+            parser.error("evaluate-static requires --snapshot, --static-log and --allow-gpu-run")
+        result = evaluate_static_intents(args.campaign, args.snapshot, args.static_log)
     elif args.command == "register":
         if not args.snapshot or not args.reviewer:
             parser.error("--snapshot and --reviewer required")
         result = register(args.campaign, args.snapshot, args.reviewer)
     elif args.command == "compare":
         result = compare(args.campaign)
-    else:
+    elif args.command == "sweep-filter":
         if not args.shadow_root or not args.output:
             parser.error("sweep-filter requires --shadow-root and --output")
         result = sweep_filter(args.campaign, args.shadow_root, args.output)
+    else:
+        if not args.output:
+            parser.error("sweep-filter-finetunes requires --output")
+        result = sweep_filter_finetunes(args.campaign, args.output)
     print(json.dumps(result))
 
 
