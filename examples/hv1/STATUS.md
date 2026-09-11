@@ -43,7 +43,7 @@
 
 | 항목 | 값 |
 |---|---|
-| canonical HEAD | 현장 로컬. **원격 `670d285`보다 9커밋 앞섬 — 푸시 필요** |
+| canonical HEAD | 현장 로컬. **원격 `670d285`보다 6커밋 앞섬 — 푸시 필요** |
 | 회귀 테스트 | 173개 통과 (`.venv/bin/python -m pytest examples/hv1/tests`, 15초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
