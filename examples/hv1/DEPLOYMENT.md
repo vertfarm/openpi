@@ -166,11 +166,11 @@ ROS stack 재시작 또는 우회를 하지 않는다.
 
 ```bash
 # 각 8개 snapshot에 대해 한 번씩, GPU lock을 지키며 직렬 실행
-python -B -m examples.hv1.two_track_eval evaluate-intents \
+python -B -m examples.hv1.pipeline_eval evaluate-intents \
   --campaign CAMPAIGN --snapshot SNAPSHOT --allow-gpu-run
 
 # 이후 스윕은 CPU-only이며 기존 evaluation/shadow 파일을 수정하지 않는다.
-python -B -m examples.hv1.two_track_eval sweep-filter \
+python -B -m examples.hv1.pipeline_eval sweep-filter \
   --campaign CAMPAIGN --shadow-root CAMPAIGN/shadow \
   --output CAMPAIGN/evaluations/grasp_filter_sweep.json
 ```

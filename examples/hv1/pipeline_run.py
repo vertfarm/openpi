@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-from . import two_track
+from . import pipeline
 from .artifacts import ContractError
 from .artifacts import atomic_json
 from .artifacts import file_hash
@@ -59,7 +59,7 @@ def _safe_generated_cleanup(campaign, relative, evidence, reason):
 def _train(campaign, name, deadline):
     args = [
         "-m",
-        "examples.hv1.two_track_train",
+        "examples.hv1.pipeline_train",
         "--campaign",
         str(campaign),
         "--experiment",
@@ -77,7 +77,7 @@ def _evaluate(campaign, name, step, *, reference=None, smoke=False):
     snapshot = campaign / "snapshots" / name / f"step_{step:06d}"
     args = [
         "-m",
-        "examples.hv1.two_track_eval",
+        "examples.hv1.pipeline_eval",
         "evaluate",
         "--campaign",
         str(campaign),
@@ -99,7 +99,7 @@ def _cleanup_complete(campaign, relative):
 
 def execute(campaign, deadline, reviewer):
     campaign = Path(campaign).resolve()
-    manifest = two_track.verify_campaign(campaign, raw=True)
+    manifest = pipeline.verify_campaign(campaign, raw=True)
     if not reviewer.strip():
         raise ContractError("offline registry reviewer identifier is required")
     stop = datetime.fromisoformat(deadline)
@@ -108,7 +108,7 @@ def execute(campaign, deadline, reviewer):
     export = read_json(campaign / "export/export.json")
     if export.get("complete") is not True or export.get("manifest_sha256") != manifest["sha256"]:
         raise ContractError("verified common export for this campaign is required")
-    for track in two_track.TRACKS:
+    for track in pipeline.TRACKS:
         asset_id = f"hv1_{track.lower()}_{manifest['sha256'][:8]}"
         if not (campaign / "assets" / asset_id / "norm_stats.json").is_file():
             raise ContractError("both track normalization assets are required")
@@ -144,11 +144,11 @@ def execute(campaign, deadline, reviewer):
             "diagnostic smoke snapshot verified and is not a deployment candidate",
         )
     completed = []
-    for track in two_track.TRACKS:
+    for track in pipeline.TRACKS:
         result_path = campaign / "runs" / track / "result.json"
-        recipe = two_track.recipe(track, manifest["sha256"])
+        recipe = pipeline.recipe(track, manifest["sha256"])
         registry = (
-            two_track.checked(campaign / "checkpoint_registry.json")
+            pipeline.checked(campaign / "checkpoint_registry.json")
             if (campaign / "checkpoint_registry.json").is_file()
             else {"entries": {}}
         )
@@ -174,7 +174,7 @@ def execute(campaign, deadline, reviewer):
             snapshot = campaign / "snapshots" / track / f"step_{step:06d}"
             _run(
                 "-m",
-                "examples.hv1.two_track_eval",
+                "examples.hv1.pipeline_eval",
                 "register",
                 "--campaign",
                 str(campaign),
@@ -190,10 +190,10 @@ def execute(campaign, deadline, reviewer):
             "all planned inference snapshots GPU-reloaded and registered SHADOW_ONLY",
         )
         completed.append(track)
-    _run("-m", "examples.hv1.two_track_eval", "compare", "--campaign", str(campaign))
-    registry = two_track.checked(campaign / "checkpoint_registry.json")
+    _run("-m", "examples.hv1.pipeline_eval", "compare", "--campaign", str(campaign))
+    registry = pipeline.checked(campaign / "checkpoint_registry.json")
     result = dict(
-        schema=two_track.SCHEMA,
+        schema=pipeline.SCHEMA,
         manifest_sha256=manifest["sha256"],
         completed_tracks=completed,
         checkpoint_count=len(registry["entries"]),
@@ -201,7 +201,7 @@ def execute(campaign, deadline, reviewer):
         deadline=deadline,
         robot_commands_sent=0,
         deployment_status="SHADOW_ONLY",
-        complete=completed == list(two_track.TRACKS) and len(registry["entries"]) == 8,
+        complete=completed == list(pipeline.TRACKS) and len(registry["entries"]) == 8,
     )
     atomic_json(campaign / "campaign_result.json", result)
     return result

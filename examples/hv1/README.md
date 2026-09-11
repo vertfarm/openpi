@@ -7,9 +7,9 @@
 
 | 할 일 | 실행 모듈 | 상세 절차 |
 |---|---|---|
-| 세션 검수·고정 manifest·export·통계 | `examples.hv1.two_track` | [두 트랙 학습·최신 ROS 계약](TWO_TRACK_20260910.md) |
-| smoke → TODAY30·ALL59 학습·평가 순차 실행 | `examples.hv1.two_track_run` | 같은 문서의 순차 실행 |
-| 개별 학습 / 평가·후보 등록 | `examples.hv1.two_track_train` / `two_track_eval` | 복구·개별 검증용 |
+| 세션 검수·고정 manifest·export·통계 | `examples.hv1.pipeline` | [두 트랙 학습·최신 ROS 계약](TWO_TRACK_20260910.md) |
+| smoke → TODAY30·ALL59 학습·평가 순차 실행 | `examples.hv1.pipeline_run` | 같은 문서의 순차 실행 |
+| 개별 학습 / 평가·후보 등록 | `examples.hv1.pipeline_train` / `pipeline_eval` | 복구·개별 검증용 |
 | 검수된 모델의 loopback HTTP 추론 | `examples.hv1.deploy_server` | [배포 운영](DEPLOYMENT.md) |
 | ROS shadow·감독하 실행 경계 | `ros/keti_humanoid_inference` | 같은 배포 문서의 안전 gate |
 
@@ -30,18 +30,21 @@ OpenPI upstream/DROID 설정은 별도로 유지한다. Windows 터널은 관리
 | 변경 대상 | 관리 원본 |
 |---|---|
 | 원본 HDF5·영상 구조 / 학습 입출력 계약 | `native.py` / `transforms.py` |
-| 시연 선정·트랙 분할·샘플링 / 트랙 레시피 | `two_track.py` — `recipe()`가 학습 설정의 기준 |
-| OpenPI 설정 / 명시적 로컬 dataset 로딩 | `two_track_config.py` |
-| optimizer 실행·재시작 cursor | `two_track_train.py` |
-| 오프라인 지표·SHADOW_ONLY 등록 | `two_track_eval.py` |
+| 시연 선정·트랙 분할·샘플링 / 트랙 레시피 | `pipeline.py` — `recipe()`가 학습 설정의 기준 |
+| OpenPI 설정 / 명시적 로컬 dataset 로딩 | `pipeline_config.py` |
+| optimizer 실행·재시작 cursor | `pipeline_train.py` |
+| 오프라인 지표·SHADOW_ONLY 등록 | `pipeline_eval.py` |
 | 캠페인과 무관한 정책 지표 | `metrics.py` — 교차 모달·전이 지표 |
-| 순차 실행·완료 상태 보관 정책 | `two_track_run.py` |
+| 순차 실행·완료 상태 보관 정책 | `pipeline_run.py` |
 | JSON·해시·50GiB 여유 공간 | `artifacts.py` — 표준 라이브러리만 사용 |
 | BF16 저장·재로딩·파일 검증 | `checkpoints.py` — 모든 학습/배포 경로가 공유 |
 | 추론 전처리·HTTP / 로봇 안전 경계 | `deploy_server.py` / ROS 패키지의 `core.py`, `node.py` |
 
 학습 설정·평가는 trainer를 import하지 않는다. 은퇴한 `overnight_*`(A~F)와
 `readapt_*`(N/M)은 2026-09-11에 삭제했고, 어느 경로도 이들을 import하지 않는다.
+같은 날 `two_track_*`를 `pipeline*`으로 바꿨다 — **모듈 이름에 캠페인 이름을 넣지
+않는다.** 다만 `SCHEMA`는 `hv1_two_track_v1`로 남는다. 디스크에 있는 데이터의
+이름이며 `deploy_server`가 registry를 이것으로 검사한다.
 기존 public import/CLI는 호환 별칭으로 유지하며, 별칭에 구현을 복제하지 않는다.
 ROS 패키지는 컨테이너에서 독립 설치되므로 ML 공통 모듈에 의존시키지 않는다.
 
@@ -69,7 +72,7 @@ cd ~/workspace/openpi-hv1
 JAX_PLATFORMS=cpu .venv/bin/python -B -m pytest examples/hv1/tests -q -p no:cacheprovider
 .venv/bin/python -B -m ruff check examples/hv1 --select F,E4,E7,E9,I
 .venv/bin/python -B -m ruff format --check examples/hv1
-.venv/bin/python -B -m examples.hv1.two_track --help
+.venv/bin/python -B -m examples.hv1.pipeline --help
 ```
 
 ROS 경계 테스트는 [배포 문서](DEPLOYMENT.md)의 격리 ROS domain·가짜 하드웨어에서만 수행한다.
@@ -81,7 +84,7 @@ Windows 테스트는 OneDrive 밖의 새 `--basetemp`를 지정한다.
 - [A~F 올나이트 실험 기록](OVERNIGHT_20260909.md) / [재수집·N/M 운영 기록](READAPT_20260910.md):
   실행 모듈은 삭제했고 두 문서는 무엇을 돌렸는지에 대한 기록으로만 남는다.
 - `workflow/cli/review/export/verify_export/demo/adapter`: profile 기반 일반 검수·합성 회귀 테스트.
-  실제 KETI HDF5+외부 영상 수집은 위 `two_track/native` 경로를 사용한다.
+  실제 KETI HDF5+외부 영상 수집은 위 `pipeline/native` 경로를 사용한다.
 - `source_contract/ros_projection`: 소스 감사·오프라인 매핑 확인. 로봇 송신 기능 없음.
 - [초기 합성 워크플로 기록](docs/INITIAL_WORKFLOW_20260909.md): 과거 상태와 명령을 보존한 참고 문서.
   현재 운영 절차로 사용하지 않는다.

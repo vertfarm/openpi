@@ -12,25 +12,25 @@ import pytest
 from examples.hv1 import artifacts
 from examples.hv1 import checkpoints
 from examples.hv1 import metrics
-from examples.hv1 import two_track
-from examples.hv1 import two_track_config
-from examples.hv1 import two_track_eval
-from examples.hv1 import two_track_train
+from examples.hv1 import pipeline
+from examples.hv1 import pipeline_config
+from examples.hv1 import pipeline_eval
+from examples.hv1 import pipeline_train
 from examples.hv1 import workflow
 
 
 def test_old_imports_are_aliases_not_forked_implementations():
     for name in ("ContractError", "digest", "file_hash", "read_json", "write_new_json"):
         assert getattr(workflow, name) is getattr(artifacts, name)
-    assert two_track.checked is artifacts.checked
-    assert two_track.sealed is artifacts.sealed
-    assert two_track_train.save_snapshot is checkpoints.save_snapshot
-    assert two_track_train.configure is two_track_config.configure
-    assert two_track_train.local_dataset is two_track_config.local_dataset
-    assert two_track_eval.snapshot_identity is checkpoints.snapshot_identity
-    assert two_track_eval.transition_metrics is metrics.transition_metrics
-    assert two_track_eval.condition_intents is metrics.condition_intents
-    assert two_track_eval.cross_modal_matrix is metrics.cross_modal_matrix
+    assert pipeline.checked is artifacts.checked
+    assert pipeline.sealed is artifacts.sealed
+    assert pipeline_train.save_snapshot is checkpoints.save_snapshot
+    assert pipeline_train.configure is pipeline_config.configure
+    assert pipeline_train.local_dataset is pipeline_config.local_dataset
+    assert pipeline_eval.snapshot_identity is checkpoints.snapshot_identity
+    assert pipeline_eval.transition_metrics is metrics.transition_metrics
+    assert pipeline_eval.condition_intents is metrics.condition_intents
+    assert pipeline_eval.cross_modal_matrix is metrics.cross_modal_matrix
 
 
 def test_shared_artifacts_have_only_standard_library_dependencies():
@@ -59,12 +59,12 @@ def test_a_finished_campaign_leaves_nothing_importable(generation):
 
 def test_evaluation_and_configuration_never_import_the_trainer():
     root = Path(artifacts.__file__).parent
-    for path in root.glob("two_track*.py"):
-        if path.name not in ("two_track_eval.py", "two_track_config.py"):
+    for path in root.glob("pipeline*.py"):
+        if path.name not in ("pipeline_eval.py", "pipeline_config.py"):
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom) and node.module:
-                assert "two_track_train" not in node.module, path.name
+                assert "pipeline_train" not in node.module, path.name
 
 
 def test_the_training_pipeline_never_touches_the_robot():
@@ -143,10 +143,10 @@ def test_shared_snapshot_requires_complete_evidence(tmp_path, field):
     "module",
     [
         "deploy_server",
-        "two_track",
-        "two_track_run",
-        "two_track_train",
-        "two_track_eval",
+        "pipeline",
+        "pipeline_run",
+        "pipeline_train",
+        "pipeline_eval",
     ],
 )
 def test_existing_cli_help_never_starts_training_or_ros(module):

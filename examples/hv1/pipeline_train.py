@@ -12,7 +12,7 @@ import time
 
 import numpy as np
 
-from . import two_track
+from . import pipeline
 from .artifacts import GIB
 from .artifacts import ContractError
 from .artifacts import atomic_json
@@ -22,8 +22,8 @@ from .artifacts import storage_gate
 from .artifacts import write_new_json
 from .checkpoints import save_snapshot
 from .checkpoints import snapshot_identity
-from .two_track_config import configure
-from .two_track_config import local_dataset
+from .pipeline_config import configure
+from .pipeline_config import local_dataset
 
 
 class FixedSampler:
@@ -62,11 +62,11 @@ def make_loader(config, schedule, sharding, consumed=0):
 
 def train(campaign, name, deadline, *, resume=False):
     campaign = Path(campaign).resolve()
-    manifest = two_track.verify_campaign(campaign, raw=True)
-    steps = 50 if name == "SMOKE" else 1000 if name in two_track.FILTER_FINETUNES else two_track.TARGET_STEPS
-    recipe = two_track.recipe(name, manifest["sha256"], steps)
-    schedule = two_track.checked(campaign / f"sampler_{name}.json")
-    expected = two_track.sample_schedule(manifest, name, recipe["steps"] * recipe["batch_size"])
+    manifest = pipeline.verify_campaign(campaign, raw=True)
+    steps = 50 if name == "SMOKE" else 1000 if name in pipeline.FILTER_FINETUNES else pipeline.TARGET_STEPS
+    recipe = pipeline.recipe(name, manifest["sha256"], steps)
+    schedule = pipeline.checked(campaign / f"sampler_{name}.json")
+    expected = pipeline.sample_schedule(manifest, name, recipe["steps"] * recipe["batch_size"])
     if schedule != expected:
         raise ContractError("sampler schedule changed")
     stop_at = datetime.fromisoformat(deadline)
@@ -117,7 +117,7 @@ def train(campaign, name, deadline, *, resume=False):
             )
             atomic_json(run / "result.json", result)
             return result
-    storage_gate(campaign, (16 if name in two_track.FILTER_FINETUNES else 40) * GIB)
+    storage_gate(campaign, (16 if name in pipeline.FILTER_FINETUNES else 40) * GIB)
     from filelock import FileLock
     import jax
 
@@ -184,7 +184,7 @@ def train(campaign, name, deadline, *, resume=False):
                         step=step,
                         target=recipe["steps"],
                         metrics=metrics,
-                        coverage=two_track.coverage(schedule, step * config.batch_size),
+                        coverage=pipeline.coverage(schedule, step * config.batch_size),
                         seconds_per_update=float(np.median(durations[-30:])),
                         initialization=recipe["initialization"],
                         robot_commands_sent=0,
@@ -196,7 +196,7 @@ def train(campaign, name, deadline, *, resume=False):
             step = int(state.step)
             restart_path = None
             restart_skip_reason = None
-            if step > initial_step and name not in two_track.FILTER_FINETUNES:
+            if step > initial_step and name not in pipeline.FILTER_FINETUNES:
                 try:
                     storage_gate(campaign, 34 * GIB)
                 except ContractError as error:
@@ -229,7 +229,7 @@ def train(campaign, name, deadline, *, resume=False):
                     for snapshot in recipe["snapshots"]
                     if snapshot <= step
                 ],
-                coverage=two_track.coverage(schedule, step * config.batch_size),
+                coverage=pipeline.coverage(schedule, step * config.batch_size),
                 identity=identity,
                 restart_path=restart_path,
                 exact_optimizer_resume_available=restart_path is not None,
@@ -246,9 +246,7 @@ def train(campaign, name, deadline, *, resume=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", required=True)
-    parser.add_argument(
-        "--experiment", choices=["SMOKE", *two_track.TRACKS, *two_track.FILTER_FINETUNES], required=True
-    )
+    parser.add_argument("--experiment", choices=["SMOKE", *pipeline.TRACKS, *pipeline.FILTER_FINETUNES], required=True)
     parser.add_argument("--deadline", required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--allow-gpu-run", action="store_true")

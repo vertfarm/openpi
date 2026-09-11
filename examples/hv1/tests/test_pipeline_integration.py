@@ -16,9 +16,9 @@ import json
 import numpy as np
 import pytest
 
-from examples.hv1 import two_track
-from examples.hv1 import two_track_eval
-from examples.hv1 import two_track_train
+from examples.hv1 import pipeline
+from examples.hv1 import pipeline_eval
+from examples.hv1 import pipeline_train
 from examples.hv1.artifacts import ContractError
 from examples.hv1.artifacts import file_hash
 from examples.hv1.artifacts import write_new_json
@@ -53,44 +53,44 @@ def test_the_pipeline_from_source_recordings_to_a_registered_shadow_config(tmp_p
     shape = dict(frames=FRAMES, cycles=((1, 2),), video=True, hand=0.35, arm_step=0.02)
     old = source_session(
         tmp_path / "old",
-        two_track.OLD_SESSION,
-        two_track.EXPECTED_OLD,
-        declared=two_track.EXPECTED_OLD | two_track.OLD_EXCLUDED,
+        pipeline.OLD_SESSION,
+        pipeline.EXPECTED_OLD,
+        declared=pipeline.EXPECTED_OLD | pipeline.OLD_EXCLUDED,
         first_tint=0,
         **shape,
     )
     today = source_session(
         tmp_path / "today",
-        two_track.TODAY_SESSION,
-        two_track.EXPECTED_TODAY,
-        first_tint=len(two_track.EXPECTED_OLD) * FRAMES,
+        pipeline.TODAY_SESSION,
+        pipeline.EXPECTED_TODAY,
+        first_tint=len(pipeline.EXPECTED_OLD) * FRAMES,
         **shape,
     )
 
     campaign = tmp_path / "campaign"
-    manifest = two_track.prepare(old, today, campaign)
+    manifest = pipeline.prepare(old, today, campaign)
     assert len(manifest["episodes"]) == EPISODES
 
-    export = two_track.export(campaign)
+    export = pipeline.export(campaign)
     assert export["complete"] and export["splits"]["train"]["frames"] == EPISODES * FRAMES
     assert export["manifest_sha256"] == manifest["sha256"]
 
-    provenance = two_track.compute_statistics(campaign, "TODAY30")
+    provenance = pipeline.compute_statistics(campaign, "TODAY30")
     assert provenance["episode_count"] == 30 and provenance["validation_used"] is False
     assert provenance["training_frames"] == 30 * FRAMES
 
-    recipe = two_track.recipe("TODAY30", manifest["sha256"])
-    config, _ = two_track_train.configure(campaign, recipe)
+    recipe = pipeline.recipe("TODAY30", manifest["sha256"])
+    config, _ = pipeline_train.configure(campaign, recipe)
     assert config.batch_size == 2 and config.ema_decay is None
     assert config.policy_metadata["robot_motion_authorized"] is False
     assert config.policy_metadata["norm_stats_sha256"] == provenance["norm_stats_sha256"]
     assert config.policy_metadata["train_episode_ids"] == sorted(manifest["tracks"]["TODAY30"]["episode_ids"])
 
-    schedule = two_track.sample_schedule(manifest, "TODAY30", 4000)
+    schedule = pipeline.sample_schedule(manifest, "TODAY30", 4000)
     assert max(row["index"] for row in schedule["records"]) < EPISODES * FRAMES
     mesh = jax.sharding.Mesh(np.array(jax.devices("cpu")), ("batch",))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("batch"))
-    observation, actions = next(iter(two_track_train.make_loader(config, schedule, sharding)))
+    observation, actions = next(iter(pipeline_train.make_loader(config, schedule, sharding)))
     assert actions.shape == (2, 15, 32)
     assert np.isfinite(np.asarray(actions)).all()
     assert set(observation.images) == set(CAMERA_KEYS.values())
@@ -119,7 +119,7 @@ def test_the_pipeline_from_source_recordings_to_a_registered_shadow_config(tmp_p
     )
     write_new_json(snapshot / "snapshot.json", record)
     with pytest.raises(FileNotFoundError):
-        two_track_eval.register(campaign, snapshot, "synthetic-test")
+        pipeline_eval.register(campaign, snapshot, "synthetic-test")
 
     evaluation = campaign / "evaluations/TODAY30_002000.json"
     evidence = dict(
@@ -134,15 +134,15 @@ def test_the_pipeline_from_source_recordings_to_a_registered_shadow_config(tmp_p
     )
     write_new_json(evaluation, evidence)
     with pytest.raises(ContractError, match="reviewer and matching"):
-        two_track_eval.register(campaign, snapshot, "   ")
-    entry = two_track_eval.register(campaign, snapshot, "synthetic-test")
+        pipeline_eval.register(campaign, snapshot, "   ")
+    entry = pipeline_eval.register(campaign, snapshot, "synthetic-test")
     assert entry["status"] == "SHADOW_ONLY" and entry["robot_motion_authorized"] is False
 
     registry = campaign / "checkpoint_registry.json"
-    shadow_config, shadow_record = two_track_eval.registered_config(campaign, snapshot, registry)
+    shadow_config, shadow_record = pipeline_eval.registered_config(campaign, snapshot, registry)
     assert shadow_record["step"] == 2000
     assert shadow_config.policy_metadata["norm_stats_sha256"] == provenance["norm_stats_sha256"]
 
     evaluation.write_text(json.dumps(dict(evidence, gpu_reload_pass=False)), encoding="utf-8")
     with pytest.raises(ContractError):
-        two_track_eval.registered_config(campaign, snapshot, registry)
+        pipeline_eval.registered_config(campaign, snapshot, registry)

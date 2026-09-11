@@ -25,6 +25,9 @@ from .ros.keti_humanoid_inference.keti_humanoid_inference.core import Rejected
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import validate_hand_envelope
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import vector
 
+# Must equal `pipeline.SCHEMA`; duplicated so the registry gate stays cheap.
+REGISTRY_SCHEMA = "hv1_two_track_v1"
+
 
 def prepare_images(payload):
     """Match recorder geometry and official OpenPI PIL preprocessing.
@@ -71,10 +74,13 @@ def load_snapshot(campaign, snapshot, denoise=10, *, registry=None):
     # only served to reject every checkpoint anyone actually wanted to deploy.
     if registry is None:
         raise Rejected("a hash-bound SHADOW_ONLY registry is required")
+    # Checked from the literal, not from `pipeline.SCHEMA`, so a bad registry is
+    # refused without importing the training stack. `test_deploy` binds the two
+    # together so the literal cannot drift.
     registry_schema = read_json(registry).get("schema")
-    if registry_schema != "hv1_two_track_v1":
+    if registry_schema != REGISTRY_SCHEMA:
         raise Rejected(f"unsupported registry schema: {registry_schema!r}")
-    from .two_track_eval import registered_config
+    from .pipeline_eval import registered_config
 
     config, record = registered_config(campaign, snapshot, registry)
     lock = FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0)

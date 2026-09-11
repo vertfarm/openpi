@@ -7,6 +7,7 @@ import threading
 import numpy as np
 import pytest
 
+from examples.hv1.deploy_server import REGISTRY_SCHEMA
 from examples.hv1.deploy_server import make_handler
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import ARM_STATE
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import CAMERAS
@@ -75,6 +76,14 @@ def status():
         narrow_open_verified=True,
         approved_proposals=["test"],
     )
+
+
+def test_the_registry_gate_names_the_same_schema_the_pipeline_writes():
+    """deploy_server holds the literal so it can refuse a registry before the
+    training stack is imported. That is the only copy, and this is its leash."""
+    from examples.hv1 import pipeline
+
+    assert REGISTRY_SCHEMA == pipeline.SCHEMA
 
 
 def test_named_state_roundtrip():

@@ -10,7 +10,7 @@ import time
 
 import numpy as np
 
-from . import two_track
+from . import pipeline
 from .artifacts import ContractError
 from .artifacts import atomic_json
 from .artifacts import file_hash
@@ -22,8 +22,8 @@ from .metrics import cross_modal_matrix as cross_modal_matrix
 from .metrics import transition_metrics as transition_metrics
 from .native import CAMERAS
 from .native import PROMPT
-from .two_track_config import configure
-from .two_track_config import local_dataset
+from .pipeline_config import configure
+from .pipeline_config import local_dataset
 
 SNAPSHOT_STEPS = (250, 500, 1000, 2000)
 
@@ -38,12 +38,12 @@ def _observation(raw):
 
 def evaluate(campaign, snapshot, *, reference=None, smoke=False, intent_sidecar=False):
     campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
-    manifest = two_track.verify_campaign(campaign, raw=True)
+    manifest = pipeline.verify_campaign(campaign, raw=True)
     if not snapshot.is_relative_to(campaign / "snapshots"):
         raise ContractError("snapshot is outside the two-track campaign")
     record = snapshot_identity(snapshot)
     recipe = record["recipe"]
-    if recipe != two_track.recipe(recipe["name"], manifest["sha256"], recipe["steps"]):
+    if recipe != pipeline.recipe(recipe["name"], manifest["sha256"], recipe["steps"]):
         raise ContractError("snapshot recipe/manifest lineage mismatch")
     if smoke != (recipe["name"] == "SMOKE"):
         raise ContractError("smoke evaluation flag/recipe mismatch")
@@ -64,7 +64,7 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False, intent_sidecar=
         diagnostics = diagnostics[:1]
     selected = set(manifest["tracks"][recipe["track"]]["episode_ids"])
     result = dict(
-        schema=two_track.SCHEMA,
+        schema=pipeline.SCHEMA,
         manifest_sha256=manifest["sha256"],
         snapshot=str(snapshot),
         snapshot_sha256=file_hash(snapshot / "snapshot.json"),
@@ -191,12 +191,12 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False, intent_sidecar=
 
 def register(campaign, snapshot, reviewer):
     campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
-    manifest = two_track.verify_campaign(campaign)
+    manifest = pipeline.verify_campaign(campaign)
     record = snapshot_identity(snapshot)
     if (
         not reviewer.strip()
         or not snapshot.is_relative_to(campaign / "snapshots")
-        or record["recipe"]["name"] not in two_track.TRACKS
+        or record["recipe"]["name"] not in pipeline.TRACKS
         or record.get("manifest_sha256") != manifest["sha256"]
     ):
         raise ContractError("reviewer and matching two-track snapshot required")
@@ -212,9 +212,9 @@ def register(campaign, snapshot, reviewer):
         raise ContractError("complete matching diagnostic evaluation required")
     path = campaign / "checkpoint_registry.json"
     registry = (
-        two_track.checked(path)
+        pipeline.checked(path)
         if path.exists()
-        else dict(schema=two_track.SCHEMA, manifest_sha256=manifest["sha256"], entries={})
+        else dict(schema=pipeline.SCHEMA, manifest_sha256=manifest["sha256"], entries={})
     )
     key = str(snapshot.relative_to(campaign))
     entry = dict(
@@ -232,7 +232,7 @@ def register(campaign, snapshot, reviewer):
         raise ContractError("registered evidence cannot be replaced")
     registry["entries"][key] = entry
     registry.pop("sha256", None)
-    atomic_json(path, two_track.sealed(registry))
+    atomic_json(path, pipeline.sealed(registry))
     return entry
 
 
@@ -241,8 +241,8 @@ def registered_config(campaign, snapshot, registry_path):
     campaign, snapshot, registry_path = campaign.resolve(), snapshot.resolve(), registry_path.resolve()
     if registry_path != campaign / "checkpoint_registry.json" or not snapshot.is_relative_to(campaign / "snapshots"):
         raise ContractError("registry/snapshot outside campaign")
-    manifest = two_track.verify_campaign(campaign)
-    registry = two_track.checked(registry_path)
+    manifest = pipeline.verify_campaign(campaign)
+    registry = pipeline.checked(registry_path)
     entry = registry["entries"].get(str(snapshot.relative_to(campaign)))
     if (
         registry.get("manifest_sha256") != manifest["sha256"]
@@ -271,14 +271,14 @@ def registered_config(campaign, snapshot, registry_path):
 
 def compare(campaign):
     campaign = Path(campaign).resolve()
-    manifest = two_track.verify_campaign(campaign)
+    manifest = pipeline.verify_campaign(campaign)
     candidates = []
     for path in sorted((campaign / "evaluations").glob("*.json")):
         evidence = read_json(path)
         if (
             evidence.get("manifest_sha256") != manifest["sha256"]
             or evidence.get("complete") is not True
-            or evidence.get("experiment") not in two_track.TRACKS
+            or evidence.get("experiment") not in pipeline.TRACKS
         ):
             continue
         rows = [row for group in evidence["groups"].values() for row in group]
@@ -329,7 +329,7 @@ def _correct_hand_shadows(root):
         targets = [event for event in events if event["event"] == "target" and len(event.get("action", [])) >= 8]
         metadata = {} if startup is None else startup.get("metadata", {})
         key = (metadata.get("experiment"), metadata.get("step"))
-        if key[0] not in two_track.TRACKS or key[1] not in SNAPSHOT_STEPS or not targets:
+        if key[0] not in pipeline.TRACKS or key[1] not in SNAPSHOT_STEPS or not targets:
             ignored.append(str(path))
             continue
         value = {"path": str(path), "events": events, "targets": targets}
@@ -339,7 +339,7 @@ def _correct_hand_shadows(root):
             selected[key] = value
         else:
             ignored.append(str(path))
-    expected = {(track, step) for track in two_track.TRACKS for step in SNAPSHOT_STEPS}
+    expected = {(track, step) for track in pipeline.TRACKS for step in SNAPSHOT_STEPS}
     if set(selected) != expected:
         missing = sorted(expected - set(selected))
         raise ContractError(f"missing correct-hand shadow logs: {missing}")
@@ -349,12 +349,12 @@ def _correct_hand_shadows(root):
 def evaluate_static_intents(campaign, snapshot, shadow_log):
     """Run a fine-tuned policy on saved correct-hand observations without ROS."""
     campaign, snapshot, shadow_log = map(lambda value: Path(value).resolve(), (campaign, snapshot, shadow_log))
-    manifest = two_track.verify_campaign(campaign)
+    manifest = pipeline.verify_campaign(campaign)
     if not snapshot.is_relative_to(campaign / "snapshots") or not shadow_log.is_relative_to(campaign / "shadow"):
         raise ContractError("snapshot/static shadow evidence must stay inside the campaign")
     record = snapshot_identity(snapshot)
     recipe = record["recipe"]
-    if recipe.get("name") not in two_track.FILTER_FINETUNES or recipe != two_track.recipe(
+    if recipe.get("name") not in pipeline.FILTER_FINETUNES or recipe != pipeline.recipe(
         recipe["name"], manifest["sha256"], recipe["steps"]
     ):
         raise ContractError("static replay requires a filter fine-tune snapshot")
@@ -441,11 +441,11 @@ def evaluate_static_intents(campaign, snapshot, shadow_log):
 def sweep_filter(campaign, shadow_root, output, *, hold_times=(0.1, 0.2, 0.3, 0.5)):
     """CPU-only filter sweep over saved teacher-forced and scheduled shadow intents."""
     campaign, output = Path(campaign).resolve(), Path(output).resolve()
-    manifest = two_track.verify_campaign(campaign)
+    manifest = pipeline.verify_campaign(campaign)
     shadows, ignored = _correct_hand_shadows(shadow_root)
     rows = []
     for hold in hold_times:
-        for track in two_track.TRACKS:
+        for track in pipeline.TRACKS:
             for step in SNAPSHOT_STEPS:
                 sidecar_path = campaign / "evaluations" / "intent_series" / f"{track}_{step:06d}.json"
                 sidecar = read_json(sidecar_path)
@@ -531,10 +531,10 @@ def sweep_filter(campaign, shadow_root, output, *, hold_times=(0.1, 0.2, 0.3, 0.
 def sweep_filter_finetunes(campaign, output, *, hold_times=(0.1, 0.2, 0.3, 0.5)):
     """CPU-only sweep for the conditional parent-warm-start snapshots."""
     campaign, output = Path(campaign).resolve(), Path(output).resolve()
-    manifest = two_track.verify_campaign(campaign)
+    manifest = pipeline.verify_campaign(campaign)
     rows = []
     for hold in hold_times:
-        for experiment in two_track.FILTER_FINETUNES:
+        for experiment in pipeline.FILTER_FINETUNES:
             for step in (500, 1000):
                 teacher = read_json(campaign / "evaluations" / "intent_series" / f"{experiment}_{step:06d}.json")
                 static = read_json(campaign / "evaluations" / "static_intent_series" / f"{experiment}_{step:06d}.json")

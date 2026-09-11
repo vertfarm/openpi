@@ -69,8 +69,12 @@
 ## 코드 위생
 
 - 새 모듈 계열을 만들지 않는다. 기존 파일을 제자리에서 수정한다.
-  `overnight_*`와 `readapt_*` 2세대는 2026-09-11에 삭제했다. 남은 캠페인 계열은
-  `two_track_*` 하나뿐이며, 다음 캠페인은 새 계열이 아니라 이 파일들을 고친다.
+  `overnight_*`와 `readapt_*` 2세대는 2026-09-11에 삭제했고, 같은 날
+  `two_track_*`를 캠페인 중립 이름 `pipeline*`으로 바꿨다. **모듈 이름에 캠페인
+  이름을 넣지 않는다.** 다음 캠페인은 `pipeline.py`의 상수를 고치는 것이다.
+- 반대로 **디스크에 있는 데이터의 이름은 바꾸지 않는다.** `SCHEMA`는
+  `hv1_two_track_v1`로 남아 있다. 기존 manifest·schedule·snapshot·registry 전부에
+  박혀 있고 `deploy_server`가 이것으로 registry를 검사한다.
 - 캠페인과 무관한 지표·계약은 `metrics.py` / `artifacts.py` / `checkpoints.py` /
   `native.py`에 둔다. 캠페인 모듈에 넣으면 다음 캠페인이 그걸 또 복사한다.
 - 날짜 박힌 새 `.md`를 만들지 않는다. `DEPLOYMENT.md`와 `STATUS.md`를 갱신한다.

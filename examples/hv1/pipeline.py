@@ -1,4 +1,10 @@
-"""Immutable TODAY30/ALL59 preparation and deterministic training schedules."""
+"""Source recordings -> sealed manifest -> export -> recipes -> sample schedules.
+
+The module is campaign-neutral; the constants below are not. TODAY30/ALL59 is
+the 2026-09-10 campaign, and the next one edits these values rather than
+starting a `two_track_*`-style third generation - which is what the
+`overnight_*` -> `readapt_*` -> `two_track_*` history cost this project.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +25,10 @@ from .artifacts import read_json
 from .artifacts import sealed as sealed
 from .artifacts import write_new_json
 
+# Keep this string. It is stamped into every manifest, schedule, snapshot and
+# checkpoint registry already on disk, and `deploy_server` refuses a registry
+# that does not carry it. Renaming the modules does not rename the data; a new
+# value here would orphan the campaign the field is running.
 SCHEMA = "hv1_two_track_v1"
 TRACKS = ("TODAY30", "ALL59")
 FILTER_FINETUNES = ("TODAY30_FT", "ALL59_FT")

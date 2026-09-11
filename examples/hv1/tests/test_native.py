@@ -2,7 +2,7 @@
 
 These were only ever exercised through the retired readapt campaign, so they
 moved here when it went: `native` describes the recording, not the experiment,
-and both `two_track.prepare` and `two_track.export` depend on it refusing a
+and both `pipeline.prepare` and `pipeline.export` depend on it refusing a
 recording it cannot faithfully represent.
 """
 

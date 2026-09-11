@@ -1,6 +1,6 @@
 """Policy metrics that outlive any one campaign. No trainer, no ROS, no robot.
 
-These moved out of `two_track_eval` because they describe a policy, not the
+These moved out of `pipeline_eval` because they describe a policy, not the
 2026-09-10 TODAY30/ALL59 experiment whose name that module carries. Every
 retraining cycle wants the same numbers, and reaching for them through a
 campaign module means each new campaign copies them again.

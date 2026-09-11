@@ -6,7 +6,7 @@ import dataclasses
 import os
 from pathlib import Path
 
-from . import two_track
+from . import pipeline
 from .artifacts import ContractError
 from .artifacts import digest
 from .artifacts import file_hash
@@ -42,8 +42,8 @@ def local_dataset(data, model, root):
 
 def configure(campaign, recipe):
     campaign = Path(campaign).resolve()
-    manifest = two_track.verify_campaign(campaign)
-    expected = two_track.recipe(recipe["name"], manifest["sha256"], recipe["steps"])
+    manifest = pipeline.verify_campaign(campaign)
+    expected = pipeline.recipe(recipe["name"], manifest["sha256"], recipe["steps"])
     if recipe != expected:
         raise ContractError("recipe differs from the approved two-track plan")
     export = read_json(campaign / "export/export.json")
@@ -92,7 +92,7 @@ def configure(campaign, recipe):
         weight_loader = CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params")
     metadata = dict(
         config.policy_metadata,
-        campaign_schema=two_track.SCHEMA,
+        campaign_schema=pipeline.SCHEMA,
         profile=manifest["profile"],
         recipe=recipe,
         recipe_sha256=digest(recipe),
@@ -117,15 +117,16 @@ def configure(campaign, recipe):
             for name in (
                 "artifacts.py",
                 "checkpoints.py",
+                "metrics.py",
                 "native.py",
                 "transforms.py",
                 "workflow.py",
                 "openpi_run.py",
-                "two_track.py",
-                "two_track_config.py",
-                "two_track_train.py",
-                "two_track_eval.py",
-                "two_track_run.py",
+                "pipeline.py",
+                "pipeline_config.py",
+                "pipeline_train.py",
+                "pipeline_eval.py",
+                "pipeline_run.py",
             )
         },
     )
