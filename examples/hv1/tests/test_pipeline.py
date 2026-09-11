@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from examples.hv1 import native
 from examples.hv1 import pipeline
 from examples.hv1 import pipeline_eval
 from examples.hv1.artifacts import ContractError
@@ -369,6 +370,81 @@ def test_an_ablation_changes_exactly_one_thing_about_its_track():
         assert ablation["seed"] == base["seed"] and ablation["peak_lr"] == base["peak_lr"]
         assert ablation["snapshots"] == [pipeline.TARGET_STEPS]
         assert ablation["robot_motion_authorized"] is False
+
+
+def test_state_noise_moves_the_input_and_the_target_together():
+    """It runs before HV1Inputs, which computes the action delta against the
+    state. If the two were anchored differently the perturbation would become
+    label noise the model cannot undo."""
+    from examples.hv1.pipeline_train import StateNoise
+    from examples.hv1.transforms import HV1Inputs
+
+    profile = native.profile()
+    state = np.arange(15, dtype=np.float32) / 10
+    action = np.tile(np.arange(8, dtype=np.float32) / 10, (15, 1))
+    images = {camera: np.zeros((224, 224, 3), np.uint8) for camera in CAMERAS}
+    sample = {"state": state, "actions": action, "images": images}
+
+    clean = HV1Inputs(profile)(dict(sample))
+    noise = StateNoise(sigma=tuple([0.05] * 15), seed=42)
+    noised = HV1Inputs(profile)(noise(dict(sample)))
+
+    moved = np.asarray(noised["state"]) - np.asarray(clean["state"])
+    assert np.any(moved != 0)
+    # The arm delta absorbed exactly the shift its anchor took.
+    np.testing.assert_allclose(
+        np.asarray(noised["actions"])[:, :7],
+        np.asarray(clean["actions"])[:, :7] - moved[:7],
+        atol=1e-5,
+    )
+    # The grasp intent is absolute (delta index -1), so it must not move at all.
+    np.testing.assert_allclose(np.asarray(noised["actions"])[:, 7], np.asarray(clean["actions"])[:, 7])
+
+
+def test_state_noise_is_the_same_draw_for_the_same_frame():
+    """A resume must not quietly train on a different dataset."""
+    from examples.hv1.pipeline_train import StateNoise
+
+    noise = StateNoise(sigma=tuple([0.05] * 15), seed=42)
+    sample = {"state": np.arange(15, dtype=np.float32)}
+    first, second = noise(dict(sample))["state"], noise(dict(sample))["state"]
+    np.testing.assert_array_equal(first, second)
+    other = noise({"state": np.arange(15, dtype=np.float32) + 1})["state"]
+    assert not np.allclose(first, other - 1)
+    assert StateNoise(sigma=tuple([0.05] * 15), seed=7)(dict(sample))["state"].tolist() != first.tolist()
+
+
+def test_only_an_ablation_that_asked_for_noise_gets_it():
+    from examples.hv1.pipeline_train import _noisy_data_config
+
+    class Stats:
+        std = np.full(15, 0.2)
+
+    class Data:
+        norm_stats = {"state": Stats()}
+        data_transforms = None
+
+    value = manifest()
+    for name in ("TODAY30", "ALL59", "TODAY30_CLOSE45"):
+        data = Data()
+        plain, applied = _noisy_data_config(data, pipeline.recipe(name, value["sha256"]))
+        assert applied is None, f"{name} did not ask for noise"
+        assert plain is data, f"{name}'s data config must be handed back untouched"
+
+
+def test_the_deployment_config_never_carries_state_noise():
+    """`configure` builds the config deployment shares. Noise belongs only to the
+    copy `make_loader` makes, or live inference would run on corrupted state."""
+    from examples.hv1 import pipeline_config
+    from examples.hv1 import pipeline_train
+
+    source = Path(pipeline_config.__file__).read_text(encoding="utf-8")
+    assert "StateNoise" not in source and "state_noise" not in source
+    trainer = Path(pipeline_train.__file__).read_text(encoding="utf-8")
+    assert "StateNoise" in trainer and "_noisy_data_config" in trainer
+    # deploy_server reaches the config through registered_config, never make_loader.
+    server = Path(Path(pipeline_config.__file__).with_name("deploy_server.py")).read_text(encoding="utf-8")
+    assert "make_loader" not in server and "StateNoise" not in server
 
 
 def test_an_ablation_cannot_invent_a_recipe_field(monkeypatch):

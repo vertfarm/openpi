@@ -377,7 +377,53 @@ gap은 그대로 0이고 코사인은 오히려 0.9974 → 0.9985로 미세하�
 **이 실험의 값어치**: 20분 만에 레버 하나를 확실히 배제했다. 교차지표가 붙기
 전이었다면 teacher-forced 점수만 보고 "비슷하네"로 끝났을 것이다.
 
-### state 지름길 차단 — 설계안 (V1 완료, V2·V3 미승인)
+### V2·V3 — 구현·검증 완료, 실행만 남음 (2026-09-11)
+
+`pipeline.ABLATIONS`에 둘 다 들어 있다. GPU 실행만 하면 된다.
+
+| 이름 | 변경 |
+|---|---|
+| `TODAY30_NOISE10` | **V2** — `state_noise_sigma=1.0` |
+| `TODAY30_CLOSE45_NOISE10` | **V3** — V1 + V2 |
+
+```
+python -B -m examples.hv1.pipeline ablation-schedules --campaign "$CAMPAIGN"
+python -B -m examples.hv1.pipeline_train --campaign "$CAMPAIGN" \
+  --experiment TODAY30_NOISE10 --deadline <미래 ISO8601+offset> --allow-gpu-run
+python -B -m examples.hv1.pipeline_eval evaluate-cross-modal --campaign "$CAMPAIGN" \
+  --snapshot "$CAMPAIGN/snapshots/TODAY30_NOISE10/step_002000" --allow-gpu-run
+```
+
+**실기 안전 — 실제 캠페인으로 확인했다.**
+
+```
+configure()  data_transforms.inputs : ['HV1Inputs']              <- 배포가 공유하는 config
+make_loader  data_transforms.inputs : ['StateNoise','HV1Inputs'] <- 학습 전용 사본
+```
+
+`deploy_server`는 `registered_config`로만 들어오고 `make_loader`를 호출하지 않는다.
+소스에 `make_loader`/`StateNoise`가 없음을 테스트가 고정한다.
+
+**노이즈가 `HV1Inputs` 앞에 있어야 하는 이유.** delta 타깃이 `HV1Inputs` 안에서
+state 기준으로 계산된다. 뒤에 넣으면 입력과 타깃의 기준이 어긋나 모델이 되돌릴 수 없는
+라벨 잡음이 된다. 앞에 넣으면 타깃이 입력과 **같이** 움직여 복원 가능하다.
+테스트가 이것을 직접 검증한다 — 팔 7축 delta가 이동분을 정확히 흡수하고,
+절대값인 grasp intent(delta index −1)는 전혀 움직이지 않는다.
+
+**크기.** 채널별 학습 std의 1배를 rad 단위로 더한다. 팔 7축 실측 σ =
+`[0.109, 0.150, 0.115, 0.137, 0.105, 0.172, 0.140]` rad. 정규화가 quantile
+방식이고 span/std ≈ 4.4이므로 정규화 공간에서 노이즈와 신호가 **둘 다 0.226** —
+**신호 대 잡음 1:1**이다. 시계를 확실히 망가뜨린다.
+V2가 애매하면 `state_noise_sigma`를 0.5/2.0으로 쓸어보는 것이 다음 수순이다.
+
+**재현성.** 노이즈는 샘플 내용의 결정적 함수다(`crc32(state) × recipe seed`).
+resume이 다른 데이터셋을 학습하지 않는다.
+
+**레시피 안전.** `state_noise_sigma`는 `ABLATION_ONLY_FIELDS`라 절제 실험에만
+붙는다. 트랙 레시피는 필드가 늘지 않는다 — r3의 배포 스냅샷 4개(TODAY30/ALL59 ×
+1000/2000) 전부 저장된 recipe와 `pipeline.recipe()` 결과가 **여전히 일치**함을 확인했다.
+
+### 설계 근거 (V1 완료, V2·V3 준비됨)
 
 **왜 state를 쓰는가.** 액션이 state에 대한 delta(`delta_state_indices=[0..6,-1]`)이므로
 모델은 좌표 기준으로 state가 필요하지 않다. **에피소드의 어디쯤인지**를 알기 위해서만

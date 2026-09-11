@@ -120,6 +120,19 @@ python -B -m examples.hv1.pipeline_eval evaluate-cross-modal \
 Ablations keep one snapshot rather than four. 2,000 updates measured 1,006 s, so
 time is not the constraint; a snapshot is 4.9 GiB and disk is.
 
+Some ablations add a knob no track recipe has - `ABLATION_ONLY_FIELDS` lists
+which, and nothing else may be added, because a track's recipe has to keep the
+exact fields its snapshots were written with.
+
+`state_noise_sigma` is one of those. It is applied inside `make_loader` on a copy
+of the data config, prepended **before** `HV1Inputs`: that transform computes the
+action delta against the state, so noising afterwards would anchor input and
+target differently and become label noise the model cannot undo. The config
+`configure` returns - the one deployment shares - never carries it, and
+`deploy_server` reaches the policy through `registered_config`, never
+`make_loader`. Do not move this into `transforms.py`; that would noise live
+inference.
+
 ## Latest ROS interface
 
 - observation: `/kh/upper_body/observation/state/joint_states`

@@ -58,12 +58,30 @@ TARGET_STEPS = 2000
 # Each entry is the *only* difference from its track's recipe, so the comparison
 # stays one-variable. They keep a single snapshot because disk, not time, is the
 # binding constraint (2,000 updates measured 1,006 s; a snapshot costs 4.9 GiB).
+# Knobs only an ablation may carry. They are *added* to a recipe rather than
+# overriding something, so they must be listed here explicitly - a track's recipe
+# must keep the exact fields its snapshots were written with, or configure stops
+# recognising them.
+ABLATION_ONLY_FIELDS = ("state_noise_sigma",)
+
 ABLATIONS = {
-    # The stopping decision is where object position matters, and it is a small
-    # share of frames. Weight the close window instead of the shared approach.
+    # V1 (run 2026-09-11, no effect). The stopping decision is where object
+    # position matters and it is a small share of frames, so weight the close
+    # window instead of the shared approach. It did not break the shortcut:
+    # arm pose still works as a phase clock inside the close window too.
     "TODAY30_CLOSE45": dict(
         track="TODAY30",
         phase_fractions={"uniform": 0.40, "close": 0.45, "release": 0.15},
+    ),
+    # V2. Degrade the clock itself. One sigma of each channel's training spread
+    # is added to the state the trainer sees, so arm pose stops being a precise
+    # statement of progress and the images are the only exact source left.
+    "TODAY30_NOISE10": dict(track="TODAY30", state_noise_sigma=1.0),
+    # V3. Both levers, to see whether they only work together.
+    "TODAY30_CLOSE45_NOISE10": dict(
+        track="TODAY30",
+        phase_fractions={"uniform": 0.40, "close": 0.45, "release": 0.15},
+        state_noise_sigma=1.0,
     ),
 }
 
@@ -404,7 +422,7 @@ def recipe(name, manifest_sha, steps=TARGET_STEPS):
         for key, override in ABLATIONS[name].items():
             if key == "track":
                 continue
-            if key not in value:
+            if key not in value and key not in ABLATION_ONLY_FIELDS:
                 raise ContractError(f"ablation {name} overrides unknown recipe field {key!r}")
             value[key] = override
         value["ablation_of"] = ABLATIONS[name]["track"]

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from datetime import datetime
 import functools
 import json
 from pathlib import Path
 import signal
 import time
+import zlib
 
 import numpy as np
 
@@ -24,6 +26,57 @@ from .checkpoints import save_snapshot
 from .checkpoints import snapshot_identity
 from .pipeline_config import configure
 from .pipeline_config import local_dataset
+
+
+@dataclasses.dataclass(frozen=True)
+class StateNoise:
+    """Corrupt the state input during training so the images have to carry the task.
+
+    The policy reads state as a phase clock. Actions are deltas on it, and with
+    every recorded approach mutually cosine 0.89-0.99, arm pose alone says where
+    in the episode it is - so "the mean delta for this phase" collects most of
+    the loss and the cameras are never needed. This degrades that clock.
+
+    It runs *before* `HV1Inputs` on purpose. `HV1Inputs` computes the action
+    delta against the state, so noising afterwards would anchor the input and
+    the target differently and turn the perturbation into irreducible label
+    noise. Applied here, the target moves with the input and stays recoverable.
+
+    The draw is a deterministic function of the sample, so a run reproduces and
+    a resume does not silently train on a different dataset.
+
+    Training only. `make_loader` builds it into a copy of the data config;
+    `pipeline_config.configure` returns the config deployment shares, and that
+    one never carries this. Putting it there would noise live inference.
+    """
+
+    sigma: tuple[float, ...]
+    seed: int
+
+    def __call__(self, data):
+        state = np.asarray(data["state"], dtype=np.float32)
+        scale = np.asarray(self.sigma, dtype=np.float32)
+        if state.shape != scale.shape or not np.isfinite(state).all():
+            raise ContractError("state noise scale/state shape mismatch")
+        rng = np.random.default_rng([self.seed, zlib.crc32(state.tobytes())])
+        noise = rng.normal(size=state.shape).astype(np.float32) * scale
+        return {**data, "state": state + noise}
+
+
+def _noisy_data_config(data, recipe):
+    """Prepend `StateNoise` when the recipe asks for it, else hand back `data`."""
+    sigma = float(recipe.get("state_noise_sigma", 0.0) or 0.0)
+    if sigma <= 0:
+        return data, None
+    stats = (data.norm_stats or {}).get("state")
+    if stats is None or stats.std is None:
+        raise ContractError("state noise needs the track's normalization statistics")
+    # Scaled per channel by the training spread, so one sigma means the same
+    # thing on a joint that moves a radian and one that moves six milliradians.
+    scale = tuple(float(sigma * value) for value in np.asarray(stats.std, dtype=np.float64))
+    noise = StateNoise(sigma=scale, seed=recipe["seed"])
+    group = data.data_transforms
+    return dataclasses.replace(data, data_transforms=dataclasses.replace(group, inputs=(noise, *group.inputs))), noise
 
 
 class FixedSampler:
@@ -46,6 +99,9 @@ def make_loader(config, schedule, sharding, consumed=0):
     dataset = local_dataset(data, config.model, config.policy_metadata["export_roots"]["train"])
     if max(row["index"] for row in schedule["records"]) >= len(dataset):
         raise ContractError("sampler index is outside the common export")
+    data, noise = _noisy_data_config(data, config.policy_metadata["recipe"])
+    if noise is not None:
+        print(json.dumps(dict(state_noise_sigma=config.policy_metadata["recipe"]["state_noise_sigma"])), flush=True)
     dataset = data_loader.transform_dataset(dataset, data)
     loader = data_loader.TorchDataLoader(
         dataset,
