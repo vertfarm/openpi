@@ -335,14 +335,17 @@ class DeployNode(Node):
         from trajectory_msgs.msg import JointTrajectory
         from trajectory_msgs.msg import JointTrajectoryPoint
 
+        # Keep the list: assigning it to the message converts it to an
+        # array.array, which the JSON log cannot serialise.
+        positions = [float(v) for v in entry[0][:7]]
         msg = JointTrajectory()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.joint_names = list(ARM_COMMAND)
         point = JointTrajectoryPoint()
-        point.positions = [float(v) for v in entry[0][:7]]
+        point.positions = positions
         msg.points = [point]
         self.arm_pub.publish(msg)
-        self.log.write("hold", why=why, position=point.positions)
+        self.log.write("hold", why=why, position=positions)
         return True
 
     def halt(self, reason):
@@ -352,7 +355,14 @@ class DeployNode(Node):
         self.chunks.clear()
         self.log.write("fault", reason=reason, commands_sent=self.commands_sent)
         if self.live:
-            self.hold_here(reason)
+            # Holding is the best response, but a fault handler that can itself
+            # raise is worse than one that does less: disarming and the stop
+            # call must happen whatever the hold did. 2026-09-11 saw exactly
+            # this — a hold that published and then died logging its own result.
+            try:
+                self.hold_here(reason)
+            except Exception as error:  # noqa: BLE001 - never abort the fault path
+                self.get_logger().error(f"hold failed during fault: {error}")
             self.gate.disarm()
             if self.grasp_handle is not None:
                 self.grasp_handle.cancel_goal_async()
