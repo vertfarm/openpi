@@ -1,10 +1,26 @@
+"""The TODAY30/ALL59 campaign contracts.
+
+The campaign-neutral half of the retired readapt suite landed here on
+2026-09-11: session-namespaced identity, deterministic sampling, sampler
+resume, generated-state cleanup and the registry gate are properties of the
+pipeline, not of any one experiment, and readapt was the only thing testing
+them.
+"""
+
 from collections import Counter
 import json
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 from examples.hv1 import two_track
 from examples.hv1 import two_track_eval
+from examples.hv1.artifacts import ContractError
+from examples.hv1.artifacts import file_hash
+from examples.hv1.artifacts import write_new_json
+from examples.hv1.two_track_run import _safe_generated_cleanup
+from examples.hv1.two_track_train import FixedSampler
 
 
 def manifest():
@@ -114,6 +130,214 @@ def test_condition_intents_filters_pulse_and_preserves_sustained_transition():
     ]
     assert not filtered[:16].any()
     assert filtered[16:26].all()
+
+
+def test_the_same_episode_id_in_two_sessions_never_collides():
+    """Both sessions number from `episode_000000`, so an id that dropped the
+    session would silently merge two different recordings."""
+    shared = sorted(two_track.EXPECTED_OLD & two_track.EXPECTED_TODAY)
+    assert len(shared) >= 20
+    old = {two_track.uid(two_track.OLD_SESSION, e) for e in shared}
+    today = {two_track.uid(two_track.TODAY_SESSION, e) for e in shared}
+    assert not old & today
+    value = manifest()
+    ids = [episode["id"] for episode in value["episodes"]]
+    assert len(ids) == len(set(ids)) == 59
+    assert len({episode["episode_id"] for episode in value["episodes"]}) < 59
+    for session, episode in (("", "episode_000000"), ("a::b", "episode_000000"), ("s", "000000")):
+        with pytest.raises(ContractError):
+            two_track.uid(session, episode)
+
+
+def test_the_same_manifest_always_yields_the_same_schedule():
+    value = manifest()
+    first = two_track.sample_schedule(value, "TODAY30", 4000)
+    assert first == two_track.sample_schedule(value, "TODAY30", 4000)
+    today = set(first["train_episode_ids"])
+    everything = set(two_track.sample_schedule(value, "ALL59", 4000)["train_episode_ids"])
+    assert today < everything and len(everything) == 59
+
+
+def test_sampler_offsets_follow_the_common_export_and_resume_at_the_cursor():
+    """The sampler indexes the single common export, so an offset has to be the
+    running frame total in manifest order - not the track's own order."""
+    value = manifest()
+    schedule = two_track.sample_schedule(value, "TODAY30", 4000)
+    offsets, running = {}, 0
+    for episode in value["episodes"]:
+        offsets[episode["id"]] = running
+        running += episode["frames"]
+    assert schedule["common_export_episode_order"] == [e["id"] for e in value["episodes"]]
+    for row in schedule["records"]:
+        assert row["index"] == offsets[row["episode"]] + row["frame"]
+    complete = list(FixedSampler(schedule))
+    assert len(complete) == 4000
+    for cursor in (0, 100, 2000, 4000):
+        assert list(FixedSampler(schedule, cursor)) == complete[cursor:]
+    for outside in (-1, 4001):
+        with pytest.raises(ContractError, match="sampler cursor"):
+            FixedSampler(schedule, outside)
+    consumed = two_track.coverage(schedule, 100)
+    assert consumed["consumed_samples"] == 100
+    assert consumed["phase_counts"] == {"uniform": 70, "close": 15, "release": 15}
+    assert sum(consumed["episode_counts"].values()) == 100
+
+
+def test_the_two_tracks_differ_only_in_the_data_they_are_given():
+    value = manifest()
+    today, everything = (two_track.recipe(track, value["sha256"]) for track in two_track.TRACKS)
+    # Only the identity and the episode pool differ - the seed included, so the
+    # two runs draw the same phase order and differ by data alone.
+    assert {key for key in today if today[key] != everything[key]} == {"name", "track"}
+    assert today["seed"] == everything["seed"]
+    assert today["peak_lr"] == everything["peak_lr"]
+    assert today["initialization"] == everything["initialization"]
+
+
+@pytest.mark.parametrize(
+    "name,samples,message",
+    [
+        ("TODAY30", 0, "multiple of 100"),
+        ("TODAY30", 4050, "multiple of 100"),
+        ("TOMORROW", 4000, "unknown two-track experiment"),
+        ("ALL59", -100, "multiple of 100"),
+    ],
+)
+def test_no_schedule_for_an_unknown_track_or_unaligned_sample_count(name, samples, message):
+    with pytest.raises(ContractError, match=message):
+        two_track.sample_schedule(manifest(), name, samples)
+
+
+def sessions(tmp_path, source_session, **damage):
+    old = source_session(
+        tmp_path / "old",
+        two_track.OLD_SESSION,
+        two_track.EXPECTED_OLD,
+        declared=two_track.EXPECTED_OLD | two_track.OLD_EXCLUDED,
+    )
+    today = source_session(tmp_path / "today", two_track.TODAY_SESSION, two_track.EXPECTED_TODAY, **damage)
+    return old, today
+
+
+def test_prepare_seals_the_two_track_inventory(tmp_path, source_session):
+    old, today = sessions(tmp_path, source_session)
+    value = two_track.prepare(old, today, tmp_path / "campaign")
+    assert value["schema"] == two_track.SCHEMA and value["robot_motion_authorized"] is False
+    assert len(value["episodes"]) == 59
+    assert len(value["tracks"]["TODAY30"]["episode_ids"]) == 30
+    assert len(value["tracks"]["ALL59"]["episode_ids"]) == 59
+    assert len(value["diagnostics"]["old_fixed6"]) == 6
+    assert len(value["diagnostics"]["today_fixed6"]) == 6
+    assert sum(episode["suspect"] for episode in value["episodes"]) == len(two_track.OLD_SUSPECT)
+    assert two_track.verify_campaign(tmp_path / "campaign", raw=True)["sha256"] == value["sha256"]
+    with pytest.raises(ContractError, match="campaign must be a new directory"):
+        two_track.prepare(old, today, tmp_path / "campaign")
+    scanned = Path(value["episodes"][0]["path"]) / "tasks.json"
+    scanned.write_text(scanned.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    with pytest.raises(ContractError, match="raw changed"):
+        two_track.verify_campaign(tmp_path / "campaign", raw=True)
+    two_track.verify_campaign(tmp_path / "campaign")
+
+
+@pytest.mark.parametrize(
+    "damage,message",
+    [
+        (dict(hz=25), "session identity/rate"),
+        (dict(cameras=("head", "hand_r")), "three required cameras"),
+        (dict(resolution=(1280, 720)), "camera geometry"),
+        (dict(rotate=90), "camera geometry"),
+    ],
+)
+def test_a_session_that_differs_from_the_training_contract_is_refused(tmp_path, source_session, damage, message):
+    """The 2026-09-11 field session wasted an afternoon on a camera-geometry
+    theory; this is the gate that would have to have failed for it to be true."""
+    old, today = sessions(tmp_path, source_session, **damage)
+    with pytest.raises(ContractError, match=message):
+        two_track.prepare(old, today, tmp_path / "campaign")
+
+
+def test_a_session_under_a_different_name_is_refused(tmp_path, source_session):
+    old = source_session(tmp_path / "old", "some_other_session", two_track.EXPECTED_OLD)
+    today = source_session(tmp_path / "today", two_track.TODAY_SESSION, two_track.EXPECTED_TODAY)
+    with pytest.raises(ContractError, match="session identity/rate"):
+        two_track.prepare(old, today, tmp_path / "campaign")
+
+
+def test_the_source_inventory_must_match_the_approved_plan(tmp_path, source_session):
+    old = source_session(
+        tmp_path / "old",
+        two_track.OLD_SESSION,
+        two_track.EXPECTED_OLD,
+        declared=(two_track.EXPECTED_OLD | two_track.OLD_EXCLUDED) - {"episode_000005"},
+    )
+    today = source_session(tmp_path / "today", two_track.TODAY_SESSION, two_track.EXPECTED_TODAY)
+    with pytest.raises(ContractError, match="approved 29\\+30 plan"):
+        two_track.prepare(old, today, tmp_path / "campaign")
+
+
+@pytest.mark.parametrize("destination", ["inside_source", "datasets/campaign", "raw/campaign"])
+def test_the_campaign_never_lands_on_immutable_source_custody(tmp_path, source_session, destination):
+    old, today = sessions(tmp_path, source_session)
+    output = today / "campaign" if destination == "inside_source" else tmp_path / destination
+    with pytest.raises(ContractError, match="campaign"):
+        two_track.prepare(old, today, output)
+
+
+@pytest.mark.parametrize("damage", ["tampered", "short_inventory", "track_count", "duplicate_ids"])
+def test_verify_campaign_refuses_a_manifest_it_cannot_trust(tmp_path, damage):
+    value = dict(manifest())
+    if damage == "short_inventory":
+        value["episodes"] = value["episodes"][:58]
+    elif damage == "track_count":
+        value["tracks"]["TODAY30"]["episode_ids"] = value["tracks"]["TODAY30"]["episode_ids"][:29]
+    elif damage == "duplicate_ids":
+        value["episodes"][1] = dict(value["episodes"][0])
+    write_new_json(tmp_path / "manifest.json", value)
+    if damage == "tampered":
+        (tmp_path / "manifest.json").write_text(json.dumps(dict(value, target_steps=1)), encoding="utf-8")
+    with pytest.raises(ContractError):
+        two_track.verify_campaign(tmp_path)
+
+
+def test_the_registry_path_is_checked_before_any_model_is_loaded(tmp_path):
+    """`registered_config` builds a training config; the path gate has to reject
+    first, or a wrong argument reaches the weight loader before it is refused."""
+    with pytest.raises(ContractError, match="registry/snapshot outside campaign"):
+        two_track_eval.registered_config(tmp_path, tmp_path / "snapshots/TODAY30/step_001000", tmp_path / "wrong.json")
+    with pytest.raises(ContractError, match="registry/snapshot outside campaign"):
+        two_track_eval.registered_config(
+            tmp_path, tmp_path / "elsewhere/step_001000", tmp_path / "checkpoint_registry.json"
+        )
+
+
+def test_cleanup_removes_only_generated_state_and_journals_it(tmp_path):
+    campaign = tmp_path / "campaign"
+    evidence = campaign / "evaluations/TODAY30_001000.json"
+    write_new_json(evidence, dict(complete=True, gpu_reload_pass=True))
+    target = campaign / "restarts/pi05_hv1/TODAY30/1000"
+    target.mkdir(parents=True)
+    (target / "inert").write_bytes(b"generated-optimizer-state")
+    keep = tmp_path / "original.bin"
+    keep.write_bytes(b"preserve")
+
+    relative = Path("restarts/pi05_hv1/TODAY30/1000")
+    record = _safe_generated_cleanup(campaign, relative, evidence, "snapshot evaluated")
+    assert record["complete"] and record["recoverable"] is False
+    assert record["evidence_sha256"] == file_hash(evidence)
+    assert not target.exists() and keep.read_bytes() == b"preserve"
+    # Idempotent: the journal is the evidence that the removal already happened.
+    assert _safe_generated_cleanup(campaign, relative, evidence, "again")["complete"]
+
+    with pytest.raises(ContractError, match="escapes the generated campaign subtree"):
+        _safe_generated_cleanup(campaign, Path("../parent"), evidence, "escape")
+    with pytest.raises(ContractError, match="cleanup target missing without an audit journal"):
+        _safe_generated_cleanup(campaign, Path("restarts/never"), evidence, "absent")
+    linked = campaign / "restarts/linked"
+    linked.mkdir(parents=True)
+    (linked / "outside").symlink_to(keep)
+    with pytest.raises(ContractError, match="filesystem link"):
+        _safe_generated_cleanup(campaign, Path("restarts/linked"), evidence, "link")
+    assert keep.read_bytes() == b"preserve"
 
 
 def test_filter_finetune_recipe_is_parented_and_low_rate():

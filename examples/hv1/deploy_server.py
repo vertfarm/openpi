@@ -207,7 +207,7 @@ def main():
     parser.add_argument("--campaign", required=True)
     parser.add_argument("--snapshot", required=True)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--registry", help="Hash-bound readaptation SHADOW_ONLY registry; never auto-arms ROS")
+    parser.add_argument("--registry", required=True, help="Hash-bound SHADOW_ONLY registry; never auto-arms ROS")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be 1024..65535")

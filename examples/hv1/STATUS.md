@@ -205,13 +205,14 @@ hold 0.2~0.3을 선택해도 된다. 반대로 hold 0.5는 최대 오차가 0.6~
 
 ### 서버 기동 시 주의
 
-`deploy_server`는 `--registry`가 없으면
-`first deployment is restricted to verified C/F-5000`으로 **거부한다.**
-두 트랙 스냅샷을 쓰려면 반드시 다음을 붙인다.
+`--registry`는 2026-09-11부터 argparse 단계에서 **필수**다. C/F-5000만 허용했던
+legacy 분기는 삭제했으므로, 예외 없이 다음을 붙인다.
 
 ```
 --registry <campaign>/checkpoint_registry.json
 ```
+
+registry의 `schema`가 `hv1_two_track_v1`이 아니면 스냅샷을 열기 전에 거부한다.
 
 ## 사용하지 말 것
 
@@ -349,15 +350,38 @@ fault가 난다.
 앙상블은 진동을 5.6배 줄이고 순변위를 1.4배 늘렸다. 007에서 진동이
 0.0095 -> 0.0171로 증폭되던 것이 010에서 0.0055 -> 0.0047로 안정됐다.
 
-## 보류 중인 정리 작업
+## 정리 작업
 
-rollout과 그리퍼 필터 회귀가 끝난 뒤에 착수한다. 지금 하지 않는다.
+### 완료 (2026-09-11)
 
-- `overnight_*` 6파일 삭제 (import 그래프상 leaf island로 확인됨).
-  `tests/test_overnight.py`와 `test_policy_wire.py`가 함께 사라지는 것을 감수할지가 판단점.
-- `readapt_*` / `two_track_*` 통합 — recipe 차이를 JSON으로 내리기
-- 진입점 20개 → 5개 (`prepare`/`train`/`eval`/`serve`/`shadow_eval`)
-- 날짜 박힌 `.md` 3개를 `hv1-vla-runtime/logs/`로 이동
+- **B. `metrics.py` 분리** — `transition_metrics` / `condition_intents` /
+  `cross_modal_matrix`가 캠페인 모듈 밖으로 나왔다. `two_track_eval`은 재수출만 한다.
+- **C1. `overnight_*` 6파일 삭제** — leaf island 확인 후 제거. `test_overnight.py`(13개)는
+  사라졌고 `test_policy_wire.py`는 남았다.
+- **C2. `deploy_server` legacy 분기 제거** — `--registry`가 argparse 단계부터 필수다.
+- **C3. `readapt_*` 5파일(1,398줄) 삭제** — 테스트를 먼저 이관한 뒤 지웠다.
+  `test_readapt.py`(31개) + 통합 1개 → `test_two_track.py` +24, 새 `test_native.py` 13개,
+  `test_metrics.py` +11, `test_artifacts.py` +2, 새 `test_two_track_integration.py` 1개.
+  스위트는 141 → 157개. 두 캠페인 모듈은 통합하지 않고 은퇴시켰다 —
+  `readapt`는 N/M 혼합·배치 스케줄·정규화 승인 게이트를 갖고 있었고 two-track에는
+  대응물이 없다. recipe를 JSON으로 내리는 일은 남는 캠페인이 하나뿐이라 무의미해졌다.
+
+이관에서 새로 확보한 것: `native.py`의 소스 포맷 계약(이전에는 readapt 경로로만
+간접 검증됐다), `examples/hv1/*.py` 전체에 로봇 I/O가 없다는 검사, 그리고
+샘플러가 지목한 프레임이 실제로 트레이너에 도착하는지의 검증 —
+각 에피소드 영상에 `25 + 공통 export 인덱스` 밝기를 심어 배치에서 되읽는다.
+
+### 남은 것
+
+- **C4.** `two_track_*` → 캠페인 중립 이름(`pipeline*` 후보). `deploy_server`가
+  `two_track_eval.registered_config`를 import하므로 그 경로가 바뀐다. `core.py`는
+  건드리지 않으므로 서버 재시작은 불필요하다.
+- **C5.** 날짜 박힌 `.md` 3개를 `hv1-vla-runtime/logs/`로 이동.
+  `OVERNIGHT_20260909.md` / `READAPT_20260910.md`는 실행 모듈이 없어져 기록 전용 배너를 달았다.
+- **C6.** 진입점 20개 → 5개 (`prepare`/`train`/`eval`/`serve`/`shadow_eval`).
+  가장 침습적이라 마지막이다.
+- 선행 조건: `two_track.py`/`two_track_eval.py` 등 11개 파일은 원래부터
+  `ruff format` 미적용 상태다. C4 rename 전에 정리하면 diff가 섞이지 않는다.
 
 ## 산출물
 

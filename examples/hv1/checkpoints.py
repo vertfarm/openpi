@@ -1,4 +1,4 @@
-"""BF16 inference snapshots shared by overnight and readaptation workflows.
+"""BF16 inference snapshots, shared by every campaign's training and evaluation.
 
 Model dependencies load only when saving. Identity checks never initialize a GPU.
 """

@@ -60,10 +60,14 @@
 
 ```bash
 cd ~/workspace/openpi-hv1
+CAMPAIGN=~/workspace/hv1-vla-runtime/two-track-20260910-r3
 .venv/bin/python -B -m examples.hv1.deploy_server \
-  --campaign ~/workspace/hv1-vla-runtime/overnight-20260909 \
-  --snapshot ~/workspace/hv1-vla-runtime/overnight-20260909/snapshots/C/step_005000
+  --campaign "$CAMPAIGN" \
+  --snapshot "$CAMPAIGN/snapshots/TODAY30/step_001000" \
+  --registry "$CAMPAIGN/checkpoint_registry.json"
 ```
+
+`--registry`는 필수다(2026-09-11). C/F-5000만 허용했던 legacy 분기는 삭제했다.
 
 서버는 127.0.0.1:8000에만 bind한다. /health에 snapshot/stat/contract 해시가 있다.
 GPU lock을 유지해 다른 학습/평가와 충돌하지 않는다. 이미 실행 중이면 중복 시작하지 않는다.

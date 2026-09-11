@@ -6,7 +6,9 @@ import numpy as np
 import pytest
 
 from examples.hv1.artifacts import ContractError
+from examples.hv1.metrics import condition_intents
 from examples.hv1.metrics import cross_modal_matrix
+from examples.hv1.metrics import transition_metrics
 
 HORIZON = 15
 
@@ -60,3 +62,63 @@ def test_one_case_cannot_be_crossed():
 def test_a_malformed_chunk_is_refused():
     with pytest.raises(ContractError):
         cross_modal_matrix(lambda state, images: np.zeros((HORIZON, 3)), cases())
+
+
+def truth_one_cycle():
+    return np.r_[np.zeros(30), np.ones(90), np.zeros(60)]
+
+
+def test_a_perfect_replay_scores_no_error():
+    truth = truth_one_cycle()
+    result = transition_metrics(truth, truth, [30], [120])
+    assert result["error_rate"] == 0 and result["transition_error_rate"] == 0
+    assert result["close_time_error_s"] == [0] and result["release_time_error_s"] == [0]
+    assert result["extra_close"] == result["extra_release"] == 0
+    assert result["missed_close"] == result["missed_release"] == 0
+    assert result["initial_closed"] is False
+
+
+def test_a_hand_that_never_opens_is_a_missed_release_not_a_late_one():
+    result = transition_metrics(np.ones(180), truth_one_cycle(), [30], [120])
+    assert result["missed_release"] == 1 and result["initial_closed"] is True
+    assert result["predicted_release_frames"] == []
+
+
+def test_a_grasp_that_lets_go_and_regrabs_shows_as_extra_transitions():
+    """The 2026-09-10 `extra_close` finding: flow-matching sampling on a bimodal
+    channel toggles mid-grasp, which teacher-forced error rate barely registers."""
+    predicted = truth_one_cycle()
+    predicted[60:70] = 0
+    result = transition_metrics(predicted, truth_one_cycle(), [30], [120])
+    assert result["predicted_close_frames"] == [30, 70]
+    assert result["predicted_release_frames"] == [60, 120]
+    assert result["extra_close"] == 1 and result["extra_release"] == 1
+    assert result["missed_close"] == result["missed_release"] == 0
+    assert result["error_rate"] == pytest.approx(10 / 180)
+
+
+def test_a_late_but_single_cycle_is_reported_as_a_delay():
+    delayed = np.r_[np.zeros(36), np.ones(90), np.zeros(54)]
+    result = transition_metrics(delayed, truth_one_cycle(), [30], [120])
+    assert result["close_time_error_s"] == [0.2] and result["release_time_error_s"] == [0.2]
+    assert result["extra_close"] == result["extra_release"] == 0
+
+
+@pytest.mark.parametrize(
+    "predicted,truth",
+    [(np.zeros(10), np.zeros(11)), (np.zeros((10, 2)), np.zeros((10, 2))), (np.zeros(0), np.zeros(0))],
+)
+def test_unaligned_or_empty_series_are_refused(predicted, truth):
+    with pytest.raises(ContractError, match="aligned nonempty"):
+        transition_metrics(predicted, truth, [0], [1])
+
+
+@pytest.mark.parametrize("values", [np.zeros((3, 2)), np.zeros(0), np.array([0.0, np.nan, 1.0])])
+def test_conditioning_refuses_a_series_it_cannot_filter(values):
+    with pytest.raises(ContractError, match="finite nonempty"):
+        condition_intents(values)
+
+
+def test_conditioning_refuses_a_timeline_that_runs_backwards():
+    with pytest.raises(ContractError, match="monotonic"):
+        condition_intents(np.zeros(3), times=np.array([0.0, 0.2, 0.1]))

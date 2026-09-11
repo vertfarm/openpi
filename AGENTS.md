@@ -69,11 +69,15 @@
 ## 코드 위생
 
 - 새 모듈 계열을 만들지 않는다. 기존 파일을 제자리에서 수정한다.
-  이 저장소는 이미 `overnight_*` → `readapt_*` → `two_track_*` 3세대가 쌓여 있다.
+  `overnight_*`와 `readapt_*` 2세대는 2026-09-11에 삭제했다. 남은 캠페인 계열은
+  `two_track_*` 하나뿐이며, 다음 캠페인은 새 계열이 아니라 이 파일들을 고친다.
+- 캠페인과 무관한 지표·계약은 `metrics.py` / `artifacts.py` / `checkpoints.py` /
+  `native.py`에 둔다. 캠페인 모듈에 넣으면 다음 캠페인이 그걸 또 복사한다.
 - 날짜 박힌 새 `.md`를 만들지 않는다. `DEPLOYMENT.md`와 `STATUS.md`를 갱신한다.
 - git history를 재작성하지 않는다. force push, 세대별 WIP 커밋을 만들지 않는다.
-- 구조 정리(`overnight_*` 삭제, `readapt`/`two_track` 통합)는 STATUS.md가
-  허용할 때까지 보류한다.
+- 코드를 지울 때는 테스트를 먼저 이관한다. 커버리지가 줄어드는 삭제는 하지 않는다.
+- 남은 구조 정리(C4 rename, C5 문서 이동, C6 진입점 통합)는 STATUS.md의
+  「정리 작업」 순서를 따른다.
 
 ## 세션 종료 시
 

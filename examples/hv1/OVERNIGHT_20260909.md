@@ -1,5 +1,10 @@
 # HV1 은색 실린더: 올나이트 학습 / 2026-09-09
 
+> **기록 전용 (2026-09-11).** `overnight_*` 모듈은 삭제했으므로 아래 명령은 더 이상
+> 실행되지 않는다. 이 문서는 A~F 캠페인 기록이며, 현재 운영 절차는
+> [TWO_TRACK_20260910.md](TWO_TRACK_20260910.md)를 따른다.
+> 코드가 필요하면 `git show 3676ccb^:examples/hv1/overnight.py`로 꺼낸다.
+
 이 기능은 학습·기록 영상 추론 전용이다. ROS import, ROS publisher, MQTT 송신,
 로봇 enable, 자동 실기 rollout은 포함하지 않는다. 문종술 선임의 ROS2 WIP는 수정하지 않는다.
 
