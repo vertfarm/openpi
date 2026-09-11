@@ -50,6 +50,23 @@ EXPECTED_TODAY = {f"episode_{i:06d}" for i in range(33)} - {
 }
 TARGET_STEPS = 2000
 
+# Ablations that ask why the policy ignores its cameras. Each one is a separate
+# experiment name, never an edit to a track's recipe: `pipeline_config.configure`
+# compares a snapshot's stored recipe against `recipe()`, so changing TODAY30's
+# would make `deploy_server` refuse the checkpoint the field is running.
+#
+# Each entry is the *only* difference from its track's recipe, so the comparison
+# stays one-variable. They keep a single snapshot because disk, not time, is the
+# binding constraint (2,000 updates measured 1,006 s; a snapshot costs 4.9 GiB).
+ABLATIONS = {
+    # The stopping decision is where object position matters, and it is a small
+    # share of frames. Weight the close window instead of the shared approach.
+    "TODAY30_CLOSE45": dict(
+        track="TODAY30",
+        phase_fractions={"uniform": 0.40, "close": 0.45, "release": 0.15},
+    ),
+}
+
 
 def uid(session, episode):
     if not session or "::" in session or not episode.startswith("episode_") or "::" in episode:
@@ -324,13 +341,29 @@ def compute_statistics(campaign, track):
 
 
 def recipe(name, manifest_sha, steps=TARGET_STEPS):
-    if name not in {*TRACKS, *FILTER_FINETUNES, "SMOKE"}:
+    if name not in {*TRACKS, *FILTER_FINETUNES, *ABLATIONS, "SMOKE"}:
         raise ContractError("unknown two-track experiment")
     expected_steps = 50 if name == "SMOKE" else 1000 if name in FILTER_FINETUNES else TARGET_STEPS
     if steps != expected_steps:
         raise ContractError("recipe step count differs from the approved two-track plan")
-    snapshots = [50] if name == "SMOKE" else [500, 1000] if name in FILTER_FINETUNES else [250, 500, 1000, TARGET_STEPS]
-    track = "TODAY30" if name == "SMOKE" else FILTER_PARENT[name][0] if name in FILTER_PARENT else name
+    snapshots = (
+        [50]
+        if name == "SMOKE"
+        else [500, 1000]
+        if name in FILTER_FINETUNES
+        else [TARGET_STEPS]
+        if name in ABLATIONS
+        else [250, 500, 1000, TARGET_STEPS]
+    )
+    track = (
+        "TODAY30"
+        if name == "SMOKE"
+        else FILTER_PARENT[name][0]
+        if name in FILTER_PARENT
+        else ABLATIONS[name]["track"]
+        if name in ABLATIONS
+        else name
+    )
     parent = None
     if name in FILTER_PARENT:
         parent_track, parent_step = FILTER_PARENT[name]
@@ -365,6 +398,16 @@ def recipe(name, manifest_sha, steps=TARGET_STEPS):
     )
     if parent is not None:
         value["parent"] = parent
+    if name in ABLATIONS:
+        # Applied last and by key, so an ablation can only change fields the base
+        # recipe already defines - a typo becomes an error, not a silent new knob.
+        for key, override in ABLATIONS[name].items():
+            if key == "track":
+                continue
+            if key not in value:
+                raise ContractError(f"ablation {name} overrides unknown recipe field {key!r}")
+            value[key] = override
+        value["ablation_of"] = ABLATIONS[name]["track"]
     return value
 
 
@@ -448,6 +491,18 @@ def write_schedules(campaign):
     return result
 
 
+def write_ablation_schedules(campaign):
+    campaign = Path(campaign).resolve()
+    manifest = verify_campaign(campaign)
+    result = {}
+    for name in ABLATIONS:
+        value = recipe(name, manifest["sha256"], TARGET_STEPS)
+        schedule = sample_schedule(manifest, name, value["steps"] * value["batch_size"])
+        write_new_json(campaign / f"sampler_{name}.json", schedule)
+        result[name] = dict(samples=schedule["samples"], sha256=schedule["sha256"])
+    return result
+
+
 def write_filter_finetune_schedules(campaign):
     campaign = Path(campaign).resolve()
     manifest = verify_campaign(campaign)
@@ -467,7 +522,7 @@ def main():
     command.add_argument("--old", required=True)
     command.add_argument("--today", required=True)
     command.add_argument("--campaign", required=True)
-    for name in ("export", "stats", "schedules", "filter-schedules", "status"):
+    for name in ("export", "stats", "schedules", "filter-schedules", "ablation-schedules", "status"):
         command = sub.add_parser(name)
         command.add_argument("--campaign", required=True)
         if name == "stats":
@@ -483,6 +538,8 @@ def main():
         result = write_schedules(args.campaign)
     elif args.command == "filter-schedules":
         result = write_filter_finetune_schedules(args.campaign)
+    elif args.command == "ablation-schedules":
+        result = write_ablation_schedules(args.campaign)
     else:
         campaign = Path(args.campaign)
         result = dict(

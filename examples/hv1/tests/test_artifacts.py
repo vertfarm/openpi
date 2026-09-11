@@ -102,10 +102,20 @@ def test_immutable_manifest_and_mutable_progress(tmp_path):
 
 
 def test_disk_reserve_includes_pending_write(tmp_path, monkeypatch):
-    monkeypatch.setattr(artifacts.shutil, "disk_usage", lambda _: SimpleNamespace(free=58 * artifacts.GIB))
-    artifacts.storage_gate(tmp_path, 8 * artifacts.GIB)
+    """Expressed against MIN_FREE rather than a literal, so moving the floor
+    changes the floor and not what the gate means."""
+    reserve = 8 * artifacts.GIB
+    free = artifacts.MIN_FREE + reserve
+    monkeypatch.setattr(artifacts.shutil, "disk_usage", lambda _: SimpleNamespace(free=free))
+    artifacts.storage_gate(tmp_path, reserve)
     with pytest.raises(artifacts.ContractError, match="disk budget"):
-        artifacts.storage_gate(tmp_path, 8 * artifacts.GIB + 1)
+        artifacts.storage_gate(tmp_path, reserve + 1)
+
+
+def test_a_full_training_run_still_has_to_fit():
+    """pipeline_train reserves 40 GiB for a non-fine-tune run, so the floor plus
+    that reservation is what the machine actually has to have free."""
+    assert artifacts.MIN_FREE + 40 * artifacts.GIB < 100 * artifacts.GIB
 
 
 def test_shared_snapshot_identity_rejects_changed_bytes(tmp_path):

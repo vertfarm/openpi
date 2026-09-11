@@ -13,7 +13,13 @@ from pathlib import Path
 import shutil
 
 GIB = 1024**3
-MIN_FREE = 50 * GIB
+
+# Floor of free disk that must survive a reserved write. Lowered from 50 GiB on
+# 2026-09-11 by the supervisor: the field machine's root is 1.9 TB at 97% and
+# the old floor left no room to run an experiment at all, since a full training
+# run reserves 40 GiB on top of it. The reservation is what protects a given
+# run; this is the margin left for everything else on the machine.
+MIN_FREE = 15 * GIB
 
 
 class ContractError(ValueError):

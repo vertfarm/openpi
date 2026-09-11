@@ -354,6 +354,54 @@ def test_cross_modal_offset_shifts_the_anchor_and_stays_inside_the_episode():
         assert {c["frame"] for c in clamped} == {expected}
 
 
+def test_an_ablation_changes_exactly_one_thing_about_its_track():
+    """The point of an ablation is the comparison. If it drifts from its track in
+    any field but the one under test, the comparison stops meaning anything."""
+    value = manifest()
+    for name, spec in pipeline.ABLATIONS.items():
+        base = pipeline.recipe(spec["track"], value["sha256"])
+        ablation = pipeline.recipe(name, value["sha256"])
+        changed = {key for key in base if base[key] != ablation.get(key)}
+        # name and snapshots are identity and disk, not the variable under test.
+        assert changed <= {"name", "snapshots", *spec} - {"track"}, (name, changed)
+        assert ablation["track"] == base["track"] == spec["track"]
+        assert ablation["ablation_of"] == spec["track"]
+        assert ablation["seed"] == base["seed"] and ablation["peak_lr"] == base["peak_lr"]
+        assert ablation["snapshots"] == [pipeline.TARGET_STEPS]
+        assert ablation["robot_motion_authorized"] is False
+
+
+def test_an_ablation_cannot_invent_a_recipe_field(monkeypatch):
+    monkeypatch.setitem(pipeline.ABLATIONS, "BAD", dict(track="TODAY30", typo_lr=1.0))
+    with pytest.raises(ContractError, match="unknown recipe field"):
+        pipeline.recipe("BAD", manifest()["sha256"])
+
+
+def test_the_deployed_tracks_keep_the_recipe_their_snapshots_were_written_with():
+    """A snapshot stores its recipe and `configure` re-derives and compares it, so
+    editing a track's recipe makes deploy_server refuse the running checkpoint."""
+    value = manifest()
+    for track in pipeline.TRACKS:
+        assert pipeline.recipe(track, value["sha256"])["phase_fractions"] == {
+            "uniform": 0.70,
+            "close": 0.15,
+            "release": 0.15,
+        }
+        assert pipeline.recipe(track, value["sha256"])["snapshots"] == [250, 500, 1000, 2000]
+
+
+def test_an_ablation_schedule_follows_its_own_phase_weights():
+    value = manifest()
+    schedule = pipeline.sample_schedule(value, "TODAY30_CLOSE45", 4000)
+    assert Counter(row["phase"] for row in schedule["records"]) == {
+        "close": 1800,
+        "uniform": 1600,
+        "release": 600,
+    }
+    assert schedule["track"] == "TODAY30"
+    assert len(schedule["train_episode_ids"]) == 30
+
+
 def test_the_default_anchor_clears_the_measured_intent_latency():
     """TODAY30-1000 raises intent +1..+7 frames after the recorded grasp, so an
     anchor at +0 compares two near-zero numbers. The default must be past that."""
