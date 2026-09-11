@@ -63,6 +63,32 @@ The approved target is 2,000 updates per track, with inference snapshots at
 records. A checkpoint enters the registry only after BF16 CPU round-trip, file
 hash verification, GPU reload, and fixed diagnostic replay.
 
+## Does the checkpoint use its cameras?
+
+Diagnostic replay is teacher-forced: it hands the policy the state that already
+implies the answer, so a policy deciding from the arm alone passes it. On
+2026-09-11 one did - and only failed in the field, after the arm had moved.
+
+Run this on every candidate before trusting a replay score. It crosses each
+diagnostic episode's state against every diagnostic episode's images, holding
+the sampling noise fixed so the only thing that moves is the input:
+
+```bash
+python -B -m examples.hv1.pipeline_eval evaluate-cross-modal \
+  --campaign "$CAMPAIGN" --snapshot "$CAMPAIGN/snapshots/TODAY30/step_001000" \
+  --allow-gpu-run
+```
+
+It writes `evaluations/cross_modal/<experiment>_<step>_<group>.json` and reports
+two numbers. `intent_scene_gap` is the diagonal intent median minus the
+off-diagonal one: near zero means swapping in a completely different scene did
+not change the grasp decision. `direction_cosine_median` near 1.0 means the
+intended arm direction did not turn either. TODAY30-1000 scored a gap of 0.0
+with both medians at 1.021.
+
+**No threshold is applied and none is stored.** The command records the numbers;
+a supervisor reads them. It needs the GPU lock, so stop `deploy_server` first.
+
 ## Latest ROS interface
 
 - observation: `/kh/upper_body/observation/state/joint_states`

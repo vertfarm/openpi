@@ -189,6 +189,113 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False, intent_sidecar=
     return result
 
 
+def _cross_modal_cases(manifest, dataset, offsets, group, frame_offset):
+    """One (state, images) pair per diagnostic episode, taken at its grasp.
+
+    The grasp frame is where the scene has to matter: the arm is at the object,
+    the intent channel should be rising, and nothing about the state alone says
+    which object position produced it.
+    """
+    episodes = [episode for episode in manifest["episodes"] if episode["diagnostic_group"] == group]
+    if len(episodes) < 2:
+        raise ContractError(f"{group}: need at least two diagnostic episodes to cross")
+    cases = []
+    for episode in episodes:
+        if not episode["grasp_frames"]:
+            raise ContractError(f"{episode['id']}: no grasp frame to anchor on")
+        frame = min(max(0, episode["grasp_frames"][0] + frame_offset), episode["frames"] - 1)
+        raw = dataset[offsets[episode["id"]] + frame]
+        observation = _observation(raw)
+        cases.append(
+            {
+                "name": episode["id"],
+                "frame": frame,
+                "state": observation["state"],
+                "images": observation["images"],
+            }
+        )
+    return cases
+
+
+def evaluate_cross_modal(campaign, snapshot, *, group="today_fixed6", frame_offset=0):
+    """Does the policy answer from the scene, or from the arm?
+
+    Teacher-forced replay cannot tell: it hands the policy the state that
+    already implies the answer, which is how the 2026-09-11 morning evaluation
+    passed a checkpoint that ignores its cameras. This runs every diagnostic
+    state against every diagnostic episode's images and reports the gap.
+
+    The sampling noise is held fixed across all combinations on purpose. The
+    deployed policy draws fresh noise per inference, but here the question is
+    what the *input* changed, so the noise must not move with it.
+
+    No threshold is applied. The numbers go in the record and a supervisor
+    decides; a gate value was never given to this code.
+    """
+    campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
+    manifest = pipeline.verify_campaign(campaign, raw=True)
+    if not snapshot.is_relative_to(campaign / "snapshots"):
+        raise ContractError("snapshot is outside the campaign")
+    record = snapshot_identity(snapshot)
+    recipe = record["recipe"]
+    if recipe != pipeline.recipe(recipe["name"], manifest["sha256"], recipe["steps"]):
+        raise ContractError("snapshot recipe/manifest lineage mismatch")
+    config, export = configure(campaign, recipe)
+    from filelock import FileLock
+
+    from openpi.policies.policy_config import create_trained_policy
+
+    data = config.data.create(config.assets_dirs, config.model)
+    dataset = local_dataset(data, config.model, export["splits"]["train"]["root"])
+    offsets, offset = {}, 0
+    for episode in manifest["episodes"]:
+        offsets[episode["id"]] = offset
+        offset += episode["frames"]
+    cases = _cross_modal_cases(manifest, dataset, offsets, group, frame_offset)
+    with FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0):
+        policy = create_trained_policy(config, snapshot, default_prompt=PROMPT, sample_kwargs={"num_steps": 10})
+        noise = np.random.default_rng(20260911).normal(size=(15, 32)).astype(np.float32)
+
+        def predict(state, images):
+            return np.asarray(
+                policy.infer({"state": state, "images": images, "prompt": PROMPT}, noise=noise)["actions"]
+            )
+
+        matrix = cross_modal_matrix(predict, cases)
+    result = dict(
+        schema="hv1_cross_modal_v1",
+        manifest_sha256=manifest["sha256"],
+        snapshot=str(snapshot),
+        snapshot_sha256=file_hash(snapshot / "snapshot.json"),
+        experiment=recipe["name"],
+        track=recipe["track"],
+        step=record["step"],
+        normalization_sha256=record["norm_stats_sha256"],
+        diagnostic_group=group,
+        frame_offset=frame_offset,
+        anchors=[{"episode": case["name"], "frame": case["frame"]} for case in cases],
+        denoise=10,
+        shared_noise_seed=20260911,
+        robot_commands_sent=0,
+        closed_loop=False,
+        threshold_applied=False,
+        complete=True,
+        **matrix,
+    )
+    directory = campaign / "evaluations" / "cross_modal"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{recipe['name']}_{record['step']:06d}_{group}.json"
+    write_new_json(path, result)
+    return {
+        "complete": True,
+        "path": str(path),
+        "cases": matrix["cases"],
+        "intent_scene_gap": matrix["intent_scene_gap"],
+        "direction_cosine_median": matrix["direction_cosine_median"],
+        "note": matrix["note"],
+    }
+
+
 def register(campaign, snapshot, reviewer):
     campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
     manifest = pipeline.verify_campaign(campaign)
@@ -620,6 +727,7 @@ def main():
             "compare",
             "sweep-filter",
             "sweep-filter-finetunes",
+            "evaluate-cross-modal",
         ],
     )
     parser.add_argument("--campaign", required=True)
@@ -631,6 +739,13 @@ def main():
     parser.add_argument("--shadow-root")
     parser.add_argument("--output")
     parser.add_argument("--static-log")
+    parser.add_argument("--group", default="today_fixed6", help="diagnostic group to cross; default today_fixed6")
+    parser.add_argument(
+        "--frame-offset",
+        type=int,
+        default=0,
+        help="frames from the grasp to anchor each case on; default 0",
+    )
     args = parser.parse_args()
     if args.command in ("evaluate", "evaluate-intents"):
         if not args.allow_gpu_run or not args.snapshot:
@@ -646,6 +761,10 @@ def main():
         if not args.allow_gpu_run or not args.snapshot or not args.static_log:
             parser.error("evaluate-static requires --snapshot, --static-log and --allow-gpu-run")
         result = evaluate_static_intents(args.campaign, args.snapshot, args.static_log)
+    elif args.command == "evaluate-cross-modal":
+        if not args.allow_gpu_run or not args.snapshot:
+            parser.error("evaluate-cross-modal requires --snapshot and --allow-gpu-run")
+        result = evaluate_cross_modal(args.campaign, args.snapshot, group=args.group, frame_offset=args.frame_offset)
     elif args.command == "register":
         if not args.snapshot or not args.reviewer:
             parser.error("--snapshot and --reviewer required")

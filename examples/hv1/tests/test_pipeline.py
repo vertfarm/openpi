@@ -19,6 +19,7 @@ from examples.hv1 import pipeline_eval
 from examples.hv1.artifacts import ContractError
 from examples.hv1.artifacts import file_hash
 from examples.hv1.artifacts import write_new_json
+from examples.hv1.native import CAMERAS
 from examples.hv1.pipeline_run import _safe_generated_cleanup
 from examples.hv1.pipeline_train import FixedSampler
 
@@ -31,6 +32,15 @@ def manifest():
     ):
         for episode_id in ids:
             recovery = cohort == "today" and episode_id in {"episode_000002", "episode_000016"}
+            # Same rule `pipeline._scan` applies, so the fixture has the six-and-six
+            # diagnostic groups a real manifest carries.
+            diagnostic = (
+                "old_fixed6"
+                if cohort == "old" and episode_id in pipeline.OLD_DIAGNOSTIC
+                else "today_fixed6"
+                if cohort == "today" and episode_id in pipeline.TODAY_DIAGNOSTIC
+                else None
+            )
             episodes.append(
                 {
                     "id": pipeline.uid(session, episode_id),
@@ -40,7 +50,7 @@ def manifest():
                     "grasp_frames": [200, 500] if recovery else [200],
                     "release_frames": [350, 800] if recovery else [800],
                     "training_tracks": ["ALL59"] + (["TODAY30"] if cohort == "today" else []),
-                    "diagnostic_group": None,
+                    "diagnostic_group": diagnostic,
                     "suspect": cohort == "old" and episode_id in pipeline.OLD_SUSPECT,
                 }
             )
@@ -297,6 +307,57 @@ def test_verify_campaign_refuses_a_manifest_it_cannot_trust(tmp_path, damage):
         (tmp_path / "manifest.json").write_text(json.dumps(dict(value, target_steps=1)), encoding="utf-8")
     with pytest.raises(ContractError):
         pipeline.verify_campaign(tmp_path)
+
+
+def fake_dataset(value):
+    """The LeRobot row shape `_observation` reads, keyed by global frame index."""
+    return {
+        "observation.state": np.full(15, value, dtype=np.float32),
+        **{f"observation.images.{camera}": np.full((4, 4, 3), value, dtype=np.uint8) for camera in CAMERAS},
+    }
+
+
+def test_cross_modal_anchors_on_each_episode_grasp():
+    value = manifest()
+    offsets, running = {}, 0
+    for episode in value["episodes"]:
+        offsets[episode["id"]] = running
+        running += episode["frames"]
+    dataset = {index: fake_dataset(index) for index in range(running)}
+
+    cases = pipeline_eval._cross_modal_cases(value, dataset, offsets, "today_fixed6", 0)
+    assert len(cases) == 6
+    for case in cases:
+        episode = next(e for e in value["episodes"] if e["id"] == case["name"])
+        assert episode["diagnostic_group"] == "today_fixed6"
+        # Anchored on the grasp, and the row actually fetched is that frame.
+        assert case["frame"] == episode["grasp_frames"][0]
+        assert case["state"][0] == offsets[case["name"]] + case["frame"]
+        assert set(case["images"]) == set(CAMERAS)
+
+
+def test_cross_modal_offset_shifts_the_anchor_and_stays_inside_the_episode():
+    value = manifest()
+    offsets = {}
+    running = 0
+    for episode in value["episodes"]:
+        offsets[episode["id"]] = running
+        running += episode["frames"]
+    dataset = {index: fake_dataset(index) for index in range(running)}
+
+    shifted = pipeline_eval._cross_modal_cases(value, dataset, offsets, "today_fixed6", 5)
+    base = pipeline_eval._cross_modal_cases(value, dataset, offsets, "today_fixed6", 0)
+    assert [c["frame"] for c in shifted] == [c["frame"] + 5 for c in base]
+    # A wild offset must clamp rather than index another episode's frames.
+    for offset, expected in ((10**6, 999), (-(10**6), 0)):
+        clamped = pipeline_eval._cross_modal_cases(value, dataset, offsets, "today_fixed6", offset)
+        assert {c["frame"] for c in clamped} == {expected}
+
+
+def test_cross_modal_refuses_a_group_it_cannot_cross():
+    value = manifest()
+    with pytest.raises(ContractError, match="at least two diagnostic episodes"):
+        pipeline_eval._cross_modal_cases(value, {}, {}, "no_such_group", 0)
 
 
 def test_the_registry_path_is_checked_before_any_model_is_loaded(tmp_path):
