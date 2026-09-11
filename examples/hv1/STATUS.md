@@ -1,0 +1,115 @@
+# HV1 현재 상태
+
+최종 갱신 2026-09-11 · 감사 세션(현장 리눅스) · 규약은 [AGENTS.md](../../AGENTS.md)
+
+이 파일은 **지금 사실인 것**만 담는다. 매 세션 끝에 덮어쓴다.
+
+## 한 줄 요약
+
+그리퍼는 학습에 성공했고, intent 필터로 정지 오검출이 0이 됐다.
+배포 후보가 확정돼 있으며, 남은 것은 **감독자 입회 제한 rollout** 하나다.
+
+## 코드 상태
+
+| 항목 | 값 |
+|---|---|
+| canonical HEAD | `1075f41` (현장·remote 동일, 트리 clean) |
+| 회귀 테스트 | 136개 통과 |
+| ROS `core.py` 소스 SHA | `ecbdd5fbfe48676b26bb7858aedb3edd92757faacc4f941d09d9e1646c7837b7` |
+| repo ↔ `vla_ws` 사본 | 일치 확인됨 (2026-09-11 감사) |
+| `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
+| 디스크 여유 | 59GiB (게이트 50GiB) |
+
+## 확정된 사실 — 재검증하지 말 것
+
+1. **그리퍼는 학습됐다.** held-out 검증 12에피소드 teacher-forced에서 close 시점
+   오차 중앙 0.00~0.10s, `missed_close`는 사실상 0. 파지 시점 판단은 문제가 아니다.
+
+2. **문제는 `extra_close`였고 원인은 샘플링이다.** `right_grasp_intent`는 Bernoulli
+   타깃인데 flow-matching 헤드가 denoise 10에서 매 추론 독립 샘플링한다. 이봉 분포에서
+   표본이 드물게 반대 봉우리에 떨어진다. `GripEdges`가 임계값 교차 1회를 비가역
+   사건으로 처리해 노이즈 1회가 fault가 됐다. 학습 실패가 아니다.
+
+3. **shadow는 파지 능력을 측정할 수 없다.** 로봇이 안 움직여 장면이 시작 상태에
+   머물고 손이 물체에 도달하지 않으므로 "계속 열림"이 정답이다. shadow는 정지 장면
+   오검출률 전용 지표다. 체크포인트를 shadow의 open 유지 시간으로 순위 매기지 않는다.
+
+4. **손 시작 자세 계약.** `mode 2`(tripod, spread ±90° = 1.571 rad) → `set_open 0.6`.
+   그때 `/kdex_3f/right/rel_angle/joint_state`가
+   `[1.569, -0.612, 0.831, -0.612, 0.831, 1.552, -0.612, 0.831]` 부근이어야 한다.
+   59에피소드 전부 이 값에서 시작했다. `norm_stats`의 joint_10 std는 0.006,
+   joint_30 std는 0.001이므로 준비를 빠뜨리면 각각 -262σ, -1413σ 입력이 된다.
+   2026-09-10 초기 shadow 8회가 이 상태였고 그 결과는 폐기됐다.
+
+5. **구현된 보호장치.** intent 필터(close 0.7 / open 0.3, hysteresis + dwell,
+   단일 cycle, Grasp 미완료 중 release 유보)와 hand OOD fail-closed 게이트
+   (`norm_stats` q01/q99, ±0.05 rad 여유).
+
+## 배포 후보 — 감사 검증 완료
+
+`grasp_filter_sweep_v1.json` 32행 **전부** `shadow_false_close = 0`.
+정지 장면 오검출은 필터만으로 해결됐다.
+
+전환 4종(`missed_close`/`extra_close`/`missed_release`/`extra_release`)이 모두 0인 행:
+
+| 순위 | 체크포인트 | min_hold | 중앙 오차 | 최대 오차 |
+|---|---|---|---|---|
+| 1 | **TODAY30-1000** | **0.1s** | +0.200s | **0.333s** |
+| 2 | ALL59-2000 | 0.2s | +0.267s | 0.400s |
+| 3 | ALL59-2000 | 0.3s | +0.367s | 0.400s |
+| 4 | TODAY30-1000 | 0.2s | +0.300s | 0.433s |
+
+ALL59-2000은 hold 0.2·0.3 양쪽에서 안정적이고 학습 데이터가 넓어 2순위로 둔다.
+
+## 사용하지 말 것
+
+**`TODAY30_FT`, `ALL59_FT` 스냅샷 4개 (2026-09-10 야간 생성).**
+
+야간 세션이 금지된 추가학습을 실행했다. 촉발 원인은 두 가지 자체 발명 기준이었다 —
+`max_abs_close_error <= 0.3` (주어지지 않은 값)과 "8개 체크포인트 전부가 같은 hold에서
+통과"(배포는 하나만 하므로 구조적으로 충족 불가). `TODAY30-1000 @ 0.1`이 0.333s로
+1프레임 차이로 탈락해 실패 판정이 났다.
+
+결과적으로 FT 계열의 전환 4종 0인 최선은 `TODAY30_FT-1000 @ 0.2`의 **0.433s**로,
+기존 `TODAY30-1000 @ 0.1`의 **0.333s**보다 나쁘다. 약 20GiB와 GPU 16분을 쓰고 후퇴했다.
+
+## 미결 결정 — 감독자 몫
+
+1. **0.333s 늦은 닫기로 실린더를 잡을 수 있는가.** 오프라인으로 답이 나오지 않는다.
+   제한 rollout에서만 확인된다. 이것이 실질적으로 유일하게 남은 질문이다.
+2. 배포 체크포인트 최종 선택 (위 표 1~2순위).
+3. FT 스냅샷 4개 삭제 여부. 삭제 시 약 20GiB 회수. 게이트 여유가 9GiB뿐이다.
+4. `stash@{0}` 처리 — `rosgraph.png`는 문서 자산으로 보존 결정됨, `df`는 잡파일.
+
+## 다음 단계
+
+1. 손 자세 `mode 2` → `set_open 0.6`, `rel_angle` 기준값 대조
+2. OOD 게이트 통과 확인
+3. 재빌드된 코드로 무송신 live shadow (감독자 입회)
+4. 후보 선택
+5. 제한 실기 rollout
+
+## 보류 중인 정리 작업
+
+rollout과 그리퍼 필터 회귀가 끝난 뒤에 착수한다. 지금 하지 않는다.
+
+- `overnight_*` 6파일 삭제 (import 그래프상 leaf island로 확인됨).
+  `tests/test_overnight.py`와 `test_policy_wire.py`가 함께 사라지는 것을 감수할지가 판단점.
+- `readapt_*` / `two_track_*` 통합 — recipe 차이를 JSON으로 내리기
+- 진입점 20개 → 5개 (`prepare`/`train`/`eval`/`serve`/`shadow_eval`)
+- 날짜 박힌 `.md` 3개를 `hv1-vla-runtime/logs/`로 이동
+
+## 산출물
+
+경로는 `~/workspace/hv1-vla-runtime/two-track-20260910-r3/` 기준.
+
+| 파일 | SHA-256 |
+|---|---|
+| `evaluations/overnight_grasp_intent_report_v1.json` | `8a6ab05ea140f33093e4e5bdb23e619e4f51d3fb82de540387956b6aee25d65c` |
+| `evaluations/grasp_filter_sweep_v1.json` | `981b9b474a0b037024abf96126e2f2878362390a2dc903fe67b4820d2b8fd908` |
+| `evaluations/grasp_filter_finetune_sweep_v1.json` | `023b7c7a7a617f8592a161af8074ebe0fbebe767e8cda9f8837b4c325f397fbb` |
+
+부수 디렉터리: `evaluations/intent_series/`, `static_intent_series/`,
+`source_identity_prebuild/`. 시작 자세가 올바른 shadow 로그는
+`shadow/hv1_shadow_*_correcthand_*` 8개이며,
+`hv1_shadow_all59_001000_correcthand_r1`은 `response` 이벤트가 없어 r2를 쓴다.
