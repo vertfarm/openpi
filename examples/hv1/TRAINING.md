@@ -1,4 +1,19 @@
-# HV1 2026-09-10 two-track campaign
+# HV1 training pipeline
+
+Source recordings to a registered `SHADOW_ONLY` checkpoint. This is the live
+procedure; [DEPLOYMENT.md](DEPLOYMENT.md) takes over from the checkpoint.
+
+The campaign it describes is the two-track campaign of 2026-09-10, which is the
+one the field is running. Its definition lives in `pipeline.py` constants
+(`TRACKS`, `OLD_SESSION`, `TODAY_SESSION`, the excluded and diagnostic sets) -
+the next campaign edits those and this document, not a new module family. The
+`hv1_two_track_v1` schema string stays as it is, because every manifest,
+snapshot and registry on disk carries it.
+
+Retired campaigns keep their own records under [docs/](docs/); their modules are
+deleted and those commands no longer run.
+
+## The two tracks
 
 This campaign trains two independent policies from the official `pi05_base`:
 

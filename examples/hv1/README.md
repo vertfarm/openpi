@@ -7,7 +7,7 @@
 
 | 할 일 | 실행 모듈 | 상세 절차 |
 |---|---|---|
-| 세션 검수·고정 manifest·export·통계 | `examples.hv1.pipeline` | [두 트랙 학습·최신 ROS 계약](TWO_TRACK_20260910.md) |
+| 세션 검수·고정 manifest·export·통계 | `examples.hv1.pipeline` | [학습 파이프라인·최신 ROS 계약](TRAINING.md) |
 | smoke → TODAY30·ALL59 학습·평가 순차 실행 | `examples.hv1.pipeline_run` | 같은 문서의 순차 실행 |
 | 개별 학습 / 평가·후보 등록 | `examples.hv1.pipeline_train` / `pipeline_eval` | 복구·개별 검증용 |
 | 검수된 모델의 loopback HTTP 추론 | `examples.hv1.deploy_server` | [배포 운영](DEPLOYMENT.md) |
@@ -54,7 +54,8 @@ ROS 패키지는 컨테이너에서 독립 설치되므로 ML 공통 모듈에 �
 - head/hand_l/hand_r 모두 유지. 카메라 dropout 없음.
 - mode 2, wrap 닫기, narrow 0.6 열기. 왼팔 pose 3 조망 자세.
 - 은색 실린더를 오른손으로 집어 트레이에 놓는 고정 prompt.
-- N/M은 동일 C-5000에서 독립 초기화, 기존 통계 유지, 새 optimizer 사용.
+- TODAY30·ALL59는 공식 `pi05_base`에서 각각 독립 초기화하고, 트랙별 학습 데이터로만
+  정규화 통계를 재계산하며, optimizer를 새로 만든다.
 - 미검수 데이터·변경된 원본/통계·불완전 snapshot은 차단. 기존 원본과 모델은 자동 정리하지 않는다.
 - 모델 등록/교체는 ARM이 아니다. shadow 지표는 실물 성공률이 아니며,
   물리 E-stop만으로 guardian·freshness·소유권 검사를 대신하지 않는다.
@@ -81,7 +82,7 @@ Windows 테스트는 OneDrive 밖의 새 `--basetemp`를 지정한다.
 
 ## 현재 운영과 구분해 보존하는 코드
 
-- [A~F 올나이트 실험 기록](OVERNIGHT_20260909.md) / [재수집·N/M 운영 기록](READAPT_20260910.md):
+- [A~F 올나이트 실험 기록](docs/OVERNIGHT_20260909.md) / [재수집·N/M 운영 기록](docs/READAPT_20260910.md):
   실행 모듈은 삭제했고 두 문서는 무엇을 돌렸는지에 대한 기록으로만 남는다.
 - `workflow/cli/review/export/verify_export/demo/adapter`: profile 기반 일반 검수·합성 회귀 테스트.
   실제 KETI HDF5+외부 영상 수집은 위 `pipeline/native` 경로를 사용한다.

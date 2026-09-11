@@ -387,13 +387,25 @@ fault가 난다.
   부수적으로 `metrics.py`가 `implementation_sha256`에서 빠져 있던 것을 고쳤다.
   B에서 코드가 `pipeline_eval.py` 밖으로 나가면서 해시 추적에서 누락됐었다.
 
+- **C5. 날짜 박힌 `.md` 정리** — 목적지를 `hv1-vla-runtime/logs/`에서 바꿨다.
+  런타임 디렉터리는 git에 없고 **git이 두 머신의 유일한 공유 채널**이므로, 거기로
+  옮기면 Windows 에이전트가 문서를 못 읽는다. 특히 `TWO_TRACK_20260910.md`는
+  현행 runbook이라 살아 있는 절차를 공유 채널에서 빼는 셈이었다.
+
+  | 이전 | 이후 | 이유 |
+  |---|---|---|
+  | `TWO_TRACK_20260910.md` | `TRAINING.md` | 현행 절차. `DEPLOYMENT.md`의 짝 — 학습은 TRAINING, 배포는 DEPLOYMENT |
+  | `OVERNIGHT_20260909.md` | `docs/OVERNIGHT_20260909.md` | 은퇴 기록. `docs/INITIAL_WORKFLOW_20260909.md`가 선례 |
+  | `READAPT_20260910.md` | `docs/READAPT_20260910.md` | 은퇴 기록 |
+
+  최상위는 이제 `README.md` / `STATUS.md` / `TRAINING.md` / `DEPLOYMENT.md` 네 개이며
+  전부 날짜가 없다. `docs/`에 날짜 박힌 기록 3개. 링크 15개 전부 확인했다.
+  README의 「유지할 계약」에 남아 있던 N/M(readapt) 항목도 트랙 계약으로 교체했다.
+
 ### 남은 것
 
-- **C5.** 날짜 박힌 `.md` 3개를 `hv1-vla-runtime/logs/`로 이동.
-  `OVERNIGHT_20260909.md` / `READAPT_20260910.md`는 실행 모듈이 없어져 기록 전용 배너를 달았다.
-  `TWO_TRACK_20260910.md`는 아직 현행 runbook이다 — 이동 전에 README 링크를 확인한다.
 - **C6.** 진입점 20개 → 5개 (`prepare`/`train`/`eval`/`serve`/`shadow_eval`).
-  가장 침습적이라 마지막이다.
+  가장 침습적이라 마지막이다. `TRAINING.md`의 명령 블록이 함께 바뀐다.
 
 ## 산출물
 

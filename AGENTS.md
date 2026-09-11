@@ -77,7 +77,10 @@
   박혀 있고 `deploy_server`가 이것으로 registry를 검사한다.
 - 캠페인과 무관한 지표·계약은 `metrics.py` / `artifacts.py` / `checkpoints.py` /
   `native.py`에 둔다. 캠페인 모듈에 넣으면 다음 캠페인이 그걸 또 복사한다.
-- 날짜 박힌 새 `.md`를 만들지 않는다. `DEPLOYMENT.md`와 `STATUS.md`를 갱신한다.
+- 날짜 박힌 새 `.md`를 만들지 않는다. 최상위 네 개를 갱신한다 —
+  `README.md`(진입점) / `TRAINING.md`(학습) / `DEPLOYMENT.md`(배포) / `STATUS.md`(현재 사실).
+  은퇴한 절차 기록만 `examples/hv1/docs/`에 날짜와 함께 남긴다.
+  문서를 `hv1-vla-runtime`으로 옮기지 않는다 — git에 없으므로 다른 머신이 읽지 못한다.
 - git history를 재작성하지 않는다. force push, 세대별 WIP 커밋을 만들지 않는다.
 - 코드를 지울 때는 테스트를 먼저 이관한다. 커버리지가 줄어드는 삭제는 하지 않는다.
 - 남은 구조 정리(C4 rename, C5 문서 이동, C6 진입점 통합)는 STATUS.md의
