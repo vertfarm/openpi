@@ -210,22 +210,48 @@ class Observations:
 
 
 class ChunkQueue:
-    """Time-align full predictions; execute three future samples per replan."""
+    """Time-align full predictions; execute three future samples per replan.
+
+    Each replan is asked for fifteen future samples and only three are spent
+    before the next one arrives, so every instant is predicted several times
+    over. Consecutive predictions of the same instant disagree by far more than
+    the trajectory inside any one of them - measured on 2026-09-11, an overlap
+    mismatch of 0.0777 rad against 0.0079 within a chunk - and executing three
+    samples from each in turn stitches those disagreements together. The arm
+    then oscillates instead of advancing: 32 rad of commanded path bought 0.017
+    rad of displacement over 45 seconds.
+
+    So a sample is averaged over every prediction of that instant, weighted
+    towards the newest, which leaves what the predictions agree on. With
+    `ensemble_decay` at zero the average is uniform; raising it discounts older
+    predictions; a very large value reduces to executing the newest alone,
+    which is the behaviour this replaced.
+    """
 
     period = 1.0 / 30
     prefix = 3
 
-    def __init__(self):
+    def __init__(self, ensemble_decay=0.3):
+        if not math.isfinite(ensemble_decay) or ensemble_decay < 0:
+            raise Rejected("ensemble decay must be finite and non-negative")
+        self.decay = float(ensemble_decay)
         self.queue = deque()
         self.last_sent = None
         self.audit = {}
         self.last_meta = None
+        self.origin = None
+        self.votes = {}
 
     def clear(self):
         self.queue.clear()
         self.last_sent = None
         self.audit.clear()
         self.last_meta = None
+        self.origin = None
+        self.votes.clear()
+
+    def _slot(self, when):
+        return int(round((when - self.origin) / self.period))
 
     def offer(self, actions, anchor, now, *, sequence=None, lead_s=0.002):
         a = np.asarray(actions, dtype=np.float64)
@@ -245,6 +271,14 @@ class ChunkQueue:
         targets = [{"due": due + i * self.period, "action": a[start + i].tolist()} for i in range(self.prefix)]
         proposal = {"sequence": sequence, "anchor": anchor, "targets": targets}
         proposal_id = hashlib.sha256(json.dumps(proposal, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if self.origin is None:
+            self.origin = due
+        # Every sample this chunk predicts votes, not only the three spent
+        # before the next replan: a sample three slots out is predicted now and
+        # again by each replan that follows, and averaging those is the point.
+        for i in range(start, len(a)):
+            when = due + (i - start) * self.period
+            self.votes.setdefault(self._slot(when), []).append((proposal_id, a[i].copy()))
         for i, target in enumerate(targets):
             self.queue.append((target["due"], a[start + i].copy()))
             self.audit[target["due"]] = {
@@ -275,6 +309,20 @@ class ChunkQueue:
         self.queue.popleft()
         self.last_sent = now
         self.last_meta = self.audit.pop(due, None)
+        slot = None if self.origin is None else self._slot(due)
+        for stale in [n for n in self.votes if slot is not None and n < slot]:
+            del self.votes[stale]
+        votes = self.votes.pop(slot, None) if slot is not None else None
+        if votes:
+            ages = np.arange(len(votes) - 1, -1, -1, dtype=np.float64)
+            weight = np.exp(-self.decay * ages)
+            action = np.average([v for _, v in votes], axis=0, weights=weight / weight.sum())
+            if self.last_meta is not None:
+                # Every prediction that moved this sample has to have been
+                # qualified, not just the newest: the executed value is a blend
+                # of all of them and belongs to none.
+                self.last_meta = {**self.last_meta, "proposal_ids": [pid for pid, _ in votes],
+                                  "ensembled": len(votes)}
         return due, action
 
 
@@ -440,7 +488,10 @@ class LiveGate:
             raise Rejected("not locally armed")
         self.guardian(status, received, now)
         approvals = status.get("approved_proposals", [])
-        if not proposal_id or not isinstance(approvals, list) or proposal_id not in approvals:
+        wanted = proposal_id if isinstance(proposal_id, (list, tuple)) else [proposal_id]
+        if not wanted or not all(wanted) or not isinstance(approvals, list):
+            raise Rejected("proposed trajectory not qualified by guardian")
+        if any(one not in approvals for one in wanted):
             raise Rejected("proposed trajectory not qualified by guardian")
         q, measured = vector(target, 7), vector(measured, 7)
         if np.any(q < self.p["joint_min"]) or np.any(q > self.p["joint_max"]):

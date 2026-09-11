@@ -129,8 +129,13 @@ class DeployNode(Node):
             profile=self.profile,
             adapter_core_sha256=CORE_SOURCE_SHA256,
             gripper_filter=self.grip_config,
+            ensemble_decay=args.ensemble_decay,
         )
-        self.obs, self.chunks, self.grip = Observations(), ChunkQueue(), GripEdges(**self.grip_config)
+        self.obs, self.chunks, self.grip = (
+            Observations(),
+            ChunkQueue(args.ensemble_decay),
+            GripEdges(**self.grip_config),
+        )
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.future = None
         self.sequence = 0
@@ -459,7 +464,8 @@ class DeployNode(Node):
                 self.guard_status,
                 self.guard_received,
                 now,
-                proposal_id=self.chunks.last_meta["proposal_id"],
+                proposal_id=self.chunks.last_meta.get("proposal_ids")
+                or self.chunks.last_meta["proposal_id"],
             )
             self.hand_event(event, now)
             from trajectory_msgs.msg import JointTrajectory
@@ -593,6 +599,12 @@ def main():
     parser.add_argument("--grip-close-threshold", type=float, default=0.7)
     parser.add_argument("--grip-open-threshold", type=float, default=0.3)
     parser.add_argument("--grip-min-hold", type=float, default=0.2)
+    parser.add_argument(
+        "--ensemble-decay",
+        type=float,
+        default=0.3,
+        help="weight decay over older predictions of the same sample; 0 averages them evenly",
+    )
     args, ros_args = parser.parse_known_args()
     if args.mode == "live" and (not args.profile or not args.mqtt_host):
         parser.error("live requires field profile and raw MQTT observer")
