@@ -52,3 +52,13 @@ def test_refuses_a_step_larger_than_max_step():
 )
 def test_refuses_malformed_payloads(broken):
     assert qualify_proposal(broken, -LIMIT, LIMIT, STEP) is None
+
+
+def test_a_rejection_names_the_joint_and_the_margin():
+    """The rejected target is never published, so the fault line is the only
+    place its magnitude can appear."""
+    from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import worst
+
+    step = np.array([0.001, 0.002, 0.0500, 0.003, 0.004, 0.005, 0.006])
+    message = "target step" + worst(step, np.full(7, 0.041))
+    assert message == "target step: joint 3 at 0.0500 over 0.0410"

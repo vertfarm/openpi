@@ -368,6 +368,20 @@ def qualify_proposal(payload, joint_min, joint_max, max_step):
     return proposal_id
 
 
+def worst(value, limit):
+    """Name the joint that broke a bound and by how much.
+
+    A rejection is raised before the target is published, so the offending
+    command never reaches the log as a target event: without this the fault
+    line says only which bound broke, and the number that would let an
+    operator set that bound is the one number nowhere on disk.
+    """
+    over = np.asarray(value) - np.asarray(limit)
+    joint = int(np.argmax(over))
+    limits = np.broadcast_to(np.asarray(limit, dtype=float), over.shape)
+    return f": joint {joint + 1} at {float(np.asarray(value)[joint]):.4f} over {limits[joint]:.4f}"
+
+
 class LiveGate:
     """Physical limits are required inputs, never inferred from demonstrations."""
 
@@ -430,9 +444,9 @@ class LiveGate:
             raise Rejected("proposed trajectory not qualified by guardian")
         q, measured = vector(target, 7), vector(measured, 7)
         if np.any(q < self.p["joint_min"]) or np.any(q > self.p["joint_max"]):
-            raise Rejected("joint limit")
+            raise Rejected("joint limit" + worst(np.maximum(self.p["joint_min"] - q, q - self.p["joint_max"]), 0))
         if np.any(np.abs(q - measured) > self.p["max_tracking_error"]):
-            raise Rejected("tracking error")
+            raise Rejected("tracking error" + worst(np.abs(q - measured), self.p["max_tracking_error"]))
         dt = now - self.last_t
         if not 0 < dt <= 0.2:
             raise Rejected("command continuity lost")
@@ -440,9 +454,11 @@ class LiveGate:
         v = step / dt
         acceleration = (v - self.last_v) / dt
         if np.any(np.abs(step) > self.p["max_step"]):
-            raise Rejected("target step")
-        if np.any(np.abs(v) > self.p["max_velocity"]) or np.any(np.abs(acceleration) > self.p["max_acceleration"]):
-            raise Rejected("velocity/acceleration")
+            raise Rejected("target step" + worst(np.abs(step), self.p["max_step"]))
+        if np.any(np.abs(v) > self.p["max_velocity"]):
+            raise Rejected("velocity" + worst(np.abs(v), self.p["max_velocity"]))
+        if np.any(np.abs(acceleration) > self.p["max_acceleration"]):
+            raise Rejected("acceleration" + worst(np.abs(acceleration), self.p["max_acceleration"]))
         self.last_q, self.last_v, self.last_t = q.copy(), v, now
 
     def disarm(self):
