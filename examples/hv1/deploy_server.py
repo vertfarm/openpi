@@ -62,41 +62,24 @@ def prepare_images(payload):
 def load_snapshot(campaign, snapshot, denoise=10, *, registry=None):
     from filelock import FileLock
 
-    from .artifacts import ContractError
     from .artifacts import file_hash
     from .artifacts import read_json
-    from .checkpoints import snapshot_identity
 
     campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
-    registered = None
-    record = None
-    if registry is not None:
-        registry_schema = read_json(registry).get("schema")
-        if registry_schema == "hv1_two_track_v1":
-            from .two_track_eval import registered_config
-        else:
-            from .readapt_eval import registered_config
-        registered, record = registered_config(campaign, snapshot, registry)
-    elif snapshot not in (campaign / "snapshots" / e / "step_005000" for e in ("C", "F")):
-        raise Rejected("first deployment is restricted to verified C/F-5000")
-    try:
-        if record is None:
-            record = snapshot_identity(snapshot)
-    except ContractError as exc:
-        raise Rejected(str(exc)) from exc
-    if registered is None:
-        evaluation = read_json(campaign / "evaluations" / f"{record['recipe']['name']}_005000.json")
-        if evaluation.get("gpu_reload_pass") is not True or evaluation.get("complete") is not True:
-            raise Rejected("snapshot reload evaluation missing")
+    # A registry is required. The alternative used to be a hardcoded allowance
+    # for the finished A-F campaign's C/F-5000 snapshots, which by 2026-09-11
+    # only served to reject every checkpoint anyone actually wanted to deploy.
+    if registry is None:
+        raise Rejected("a hash-bound SHADOW_ONLY registry is required")
+    registry_schema = read_json(registry).get("schema")
+    if registry_schema != "hv1_two_track_v1":
+        raise Rejected(f"unsupported registry schema: {registry_schema!r}")
+    from .two_track_eval import registered_config
+
+    config, record = registered_config(campaign, snapshot, registry)
     lock = FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0)
     lock.acquire()
     try:
-        if registered is None:
-            from .overnight_train import configure
-
-            config = configure(campaign, record["recipe"])[0]
-        else:
-            config = registered
         data_config = config.data.create(config.assets_dirs, config.model)
         state_stats = None if data_config.norm_stats is None else data_config.norm_stats.get("state")
         if state_stats is None or state_stats.q01 is None or state_stats.q99 is None:
