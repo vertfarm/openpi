@@ -35,14 +35,46 @@
 
 | 항목 | 값 |
 |---|---|
-| canonical HEAD | 정리 B·C1~C6 완료. 현장 로컬 커밋 17개, **원격 푸시 필요** |
-| 회귀 테스트 | 164개 통과 (`.venv/bin/python -m pytest`, 14초) |
+| canonical HEAD | `dda0e77` — 정리 B·C1~C6 완료. 원격 브랜치까지 fast-forward 푸시됨 |
+| 회귀 테스트 | 164개 통과 (`.venv/bin/python -m pytest examples/hv1/tests`, 14초) |
+| lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 27명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
-| repo ↔ `vla_ws` 사본 | 일치 (guardian·정지 서비스 반영 후 재확인) |
+| repo ↔ `vla_ws` 사본 | `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
-| 디스크 여유 | 58GiB (게이트 50GiB) |
+| 디스크 여유 | **56GiB** (게이트 50GiB). 아래 「디스크」 참조 |
 | 실행 코드 신원 | `pkg prefix` → `vla_ws/install`, import → `vla_ws/build`, `core.py` 해시가 서버 `adapter_core_sha256`와 일치 (2026-09-11 확인) |
+
+### 지금 떠 있는 것 — 정리 후에도 계속 살아 있다
+
+정리 커밋 6개는 `core.py`를 건드리지 않았으므로 **아래를 재시작하지 않았고, 할 필요도 없다.**
+`/health`로 실측 확인했다.
+
+| 프로세스 | 경과 | 상태 |
+|---|---|---|
+| `deploy_server` TODAY30-1000 | 1h51m | `ready=true`, `denoise=10`, `robot_commands_sent=0`, GPU lock 보유 |
+| `guardian` (컨테이너, r3 프로파일) | 1h20m | 20Hz 발행, `--workspace-clear --hardware-watchdog --release-allowed` |
+| `vla_client` | — | **없음. 로봇은 어떤 명령도 받지 않는다** |
+
+- 서버 `adapter_core_sha256` = `59775ee4…` = 현재 repo·`vla_ws`의 `core.py`. **세 곳이 일치한다.**
+- 서버 `norm_stats_sha256` = `b41b496d…`. 이름 변경 후 `pipeline_eval.registered_config`로
+  같은 registry를 다시 읽어 동일 값을 확인했다.
+- **guardian이 1시간 넘게 `workspace_clear=true`를 계속 발행하고 있다.** guardian에는
+  로봇 publisher가 없으므로 스스로 움직일 수는 없지만, 이 증거는 **이미 낡았다.**
+  다음 live client를 띄우기 전에 guardian을 재시작해 현재 작업 공간으로 다시 검수한다.
+- 서버는 GPU lock을 쥐고 있다. **학습·평가를 시작하려면 먼저 서버를 내려야 한다.**
+
+### 디스크 — 가장 큰 운영 레버
+
+| 경로 | 크기 | 성격 |
+|---|---|---|
+| `overnight-20260909/snapshots` | **84G** | A~F 캠페인. 실행 코드는 2026-09-11에 삭제됨 |
+| `two-track-20260910-r3/snapshots` | 59G | 12개 × 4.9G. 이 중 FT 4개 = **19.6G** |
+| `cache` | 31G | HF/LeRobot 캐시 |
+
+여유 56GiB에 게이트가 50GiB다. `overnight` 스냅샷 84G는 코드가 없어져 재현 불가능한
+상태이므로 가치가 낮지만, **기존 스냅샷은 읽기 전용 경계이므로 삭제는 감독자 승인이 필요하다.**
+FT 4개는 필터 fine-tune 실험이 끝났다면 19.6G를 회수할 수 있다.
 
 ## 확정된 사실 — 재검증하지 말 것
 
