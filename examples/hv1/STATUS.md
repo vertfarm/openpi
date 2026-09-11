@@ -43,14 +43,14 @@
 
 | 항목 | 값 |
 |---|---|
-| canonical HEAD | 현장 로컬. **원격 `670d285`보다 6커밋 앞섬 — 푸시 필요** |
-| 회귀 테스트 | 173개 통과 (`.venv/bin/python -m pytest examples/hv1/tests`, 15초) |
+| canonical HEAD | 현장 로컬. **원격 `670d285`보다 8커밋 앞섬 — 푸시 필요** |
+| 회귀 테스트 | 177개 통과 (`.venv/bin/python -m pytest examples/hv1/tests`, 15초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
 | repo ↔ `vla_ws` 사본 | `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
-| 디스크 여유 | **164GiB** (게이트 15GiB). 108.5GiB 회수함 |
+| 디스크 여유 | **159GiB** (게이트 15GiB). 138.6GiB 회수 (overnight 88.9 + FT 19.6 + V1 옵티마이저 30.1) |
 | 실행 코드 신원 | `pkg prefix` → `vla_ws/install`, import → `vla_ws/build`, `core.py` 해시가 서버 `adapter_core_sha256`와 일치 (2026-09-11 확인) |
 
 ### 세션 종료 시점의 실행 상태 (2026-09-11 저녁)
@@ -73,9 +73,9 @@
 guardian을 반드시 새로 띄운다 — `workspace_clear`는 사람이 검수한 증거이고 이전 세션의
 것은 낡았다.
 
-### 디스크 — 2026-09-11에 108.5 GiB 회수
+### 디스크 — 2026-09-11에 138.6 GiB 회수
 
-여유 **164 GiB** (사용률 91%). 게이트는 50 → **15 GiB**로 낮췄다(감독자 승인).
+여유 **159 GiB**. 게이트는 50 → **15 GiB**로 낮췄다(감독자 승인).
 전부 `_safe_generated_cleanup`으로 지웠으므로 각 캠페인의 `cleanup/`에 무엇을·왜·
 어떤 증거로 지웠는지 해시와 함께 남아 있다.
 
@@ -84,6 +84,7 @@ guardian을 반드시 새로 띄운다 — `workspace_clear`는 사람이 검수
 | `overnight-20260909/snapshots` | 83.4G | A~F. registry가 없어 **현재 배포 경로가 로드 자체를 못 한다**. 모듈도 삭제됨 |
 | `overnight-20260909/export_*` | 5.5G | 같은 캠페인의 LeRobot export |
 | r3 `snapshots/*_FT` | 19.6G | registry 미등록 = 배포 불가. 스윕 결과는 JSON으로 보존됨 |
+| r3 `restarts/.../TODAY30_CLOSE45` | 30.1G | V1 옵티마이저 상태. run 완료·스냅샷 저장 후라 재생성 가능 |
 
 **남긴 것**: `overnight-20260909` 기록 22M(평가·recipe·scan 썸네일·`CHECKPOINTS.md`).
 무엇을 했는지의 증거는 싸고 가치 있다.
