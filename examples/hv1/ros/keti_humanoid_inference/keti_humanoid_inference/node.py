@@ -40,6 +40,11 @@ from .core import make_request
 from .core import named_positions
 from .core import validate_hand_envelope
 
+# `now` is sampled once per tick while the MQTT thread keeps updating its own
+# arrival stamp, so a message landing mid-tick makes age slightly negative. That
+# is ordinary concurrency, not a clock fault; only a larger inversion is.
+MQTT_CLOCK_SLACK = 0.05
+
 IMAGE_TOPICS = {
     "head": "/kh/upper_body/head/color/image_raw/compressed",
     "hand_l": "/kdex_3f/left/camera/image_raw/compressed",
@@ -55,6 +60,8 @@ class RawFeedback:
         self.positions = None
         self.connected = False
         self.client = None
+        self.drops = 0
+        self.dropped_at = None
         if not host:
             return
         import paho.mqtt.client as mqtt
@@ -74,6 +81,8 @@ class RawFeedback:
     def disconnect(self, *_args):
         self.connected = False
         self.received = None
+        self.drops += 1
+        self.dropped_at = time.monotonic()
 
     def message(self, _client, _data, msg):
         if msg.retain or msg.topic != "/humanoid/upper/joint_state":
@@ -275,9 +284,18 @@ class DeployNode(Node):
         ]
         if joint_publishers != [own]:
             raise Rejected("joint command publisher conflict")
+        # Separated: a dropped broker session and a stale stream need different
+        # answers, and one shared message sent 2026-09-11 chasing a link that
+        # was delivering 100 Hz with a 31 ms worst gap the whole time.
+        if not self.raw.connected:
+            raise Rejected(f"raw MQTT session dropped (drops={self.raw.drops})")
         age = self.raw.age(now)
-        if age is None or not 0 <= age <= 0.1:
-            raise Rejected("raw MQTT feedback missing/stale")
+        if age is None:
+            raise Rejected("raw MQTT feedback not yet received")
+        if age < -MQTT_CLOCK_SLACK:
+            raise Rejected(f"raw MQTT clock inverted: {age:.4f}s")
+        if age > 0.1:
+            raise Rejected(f"raw MQTT feedback stale: {age:.4f}s over 0.1000")
         if np.any(np.abs(self.raw.positions[9:16] - state[:7]) > self.profile["max_tracking_error"]):
             raise Rejected("ROS/MQTT state mismatch")
         if not (
@@ -567,6 +585,7 @@ class DeployNode(Node):
                     "inferences": self.inferences,
                     "robot_commands_sent": self.commands_sent,
                     "raw_mqtt_age_s": self.raw.age(now),
+                    "raw_mqtt_drops": self.raw.drops,
                     "snapshot_sha256": self.metadata["snapshot_sha256"],
                 }
                 msg = String()
