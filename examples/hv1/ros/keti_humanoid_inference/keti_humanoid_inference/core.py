@@ -339,6 +339,35 @@ class GripEdges:
         return None
 
 
+def qualify_proposal(payload, joint_min, joint_max, max_step):
+    """Return a proposal's id if it may be executed, else None.
+
+    The producer side of `LiveGate.check`'s `approved_proposals`: a guardian
+    calls this, and the executor will only move on ids it returns.
+
+    The id is re-derived from the contents rather than trusted. Approving the
+    id the executor supplied would approve whatever it later chooses to run
+    under that name, which is the one thing an independent check must not do.
+    """
+    try:
+        proposal = payload["proposal"]
+        encoded = json.dumps(proposal, sort_keys=True, separators=(",", ":")).encode()
+        proposal_id = hashlib.sha256(encoded).hexdigest()
+        if proposal_id != payload.get("proposal_id"):
+            return None
+        previous = None
+        for target in proposal["targets"]:
+            action = vector(target["action"][:7], 7)
+            if np.any(action < joint_min) or np.any(action > joint_max):
+                return None
+            if previous is not None and np.any(np.abs(action - previous) > max_step):
+                return None
+            previous = action
+    except (ValueError, KeyError, TypeError, IndexError, Rejected):
+        return None
+    return proposal_id
+
+
 class LiveGate:
     """Physical limits are required inputs, never inferred from demonstrations."""
 

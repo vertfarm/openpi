@@ -19,6 +19,7 @@ setup(
         "console_scripts": [
             "vla_client = keti_humanoid_inference.node:main",
             "vla_operator = keti_humanoid_inference.operator:main",
+            "vla_guardian = keti_humanoid_inference.guardian:main",
         ]
     },
 )

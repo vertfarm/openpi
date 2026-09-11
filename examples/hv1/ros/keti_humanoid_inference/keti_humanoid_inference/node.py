@@ -207,6 +207,12 @@ class DeployNode(Node):
         self.close_client = ActionClient(self, Grasp, "/kdex_3f/right/grasp")
         self.open_client = self.create_client(SetOpen, "/kdex_3f/right/set_open")
         self.stop_client = self.create_client(Trigger, self.profile["stop_service"])
+        # A software stop the operator can call, and something for a profile to
+        # name. It holds torque at the present measurement rather than removing
+        # it: the arm is brakeless, so cutting power is a fall, not a stop.
+        # This is not a substitute for the physical E-stop, which stays the
+        # last resort for anything holding position cannot fix.
+        self.create_service(Trigger, "/hv1_vla/stop", self.stop_service)
         self.create_subscription(String, "/hv1_vla/guardian", self.guardian, 1)
         path = self.output / "operator.sock"
         if len(str(path).encode()) >= 100:
@@ -304,6 +310,41 @@ class DeployNode(Node):
             finally:
                 done.set()
 
+    def stop_service(self, _request, response):
+        held = self.hold_here("operator stop service")
+        self.halt("operator stop service")
+        response.success = held
+        response.message = "holding at measured position" if held else "no arm observation to hold"
+        return response
+
+    def hold_here(self, why):
+        """Command the arm to the position it is measured at, right now.
+
+        The arm is brakeless quasi-direct-drive: cutting power drops it. So the
+        fault response that keeps it safe is holding torque at the present
+        measurement, not removing torque. Publishing the measurement also stops
+        the driver from finishing whatever step the last setpoint still asked
+        for, which is the only motion left once commands cease.
+        """
+        if not self.live or getattr(self, "arm_pub", None) is None:
+            return False
+        entry = self.obs.entries.get("arm")
+        if entry is None:
+            self.log.write("hold_unavailable", why=why, reason="no arm observation")
+            return False
+        from trajectory_msgs.msg import JointTrajectory
+        from trajectory_msgs.msg import JointTrajectoryPoint
+
+        msg = JointTrajectory()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.joint_names = list(ARM_COMMAND)
+        point = JointTrajectoryPoint()
+        point.positions = [float(v) for v in entry[0][:7]]
+        msg.points = [point]
+        self.arm_pub.publish(msg)
+        self.log.write("hold", why=why, position=point.positions)
+        return True
+
     def halt(self, reason):
         if self.fault:
             return
@@ -311,6 +352,7 @@ class DeployNode(Node):
         self.chunks.clear()
         self.log.write("fault", reason=reason, commands_sent=self.commands_sent)
         if self.live:
+            self.hold_here(reason)
             self.gate.disarm()
             if self.grasp_handle is not None:
                 self.grasp_handle.cancel_goal_async()
