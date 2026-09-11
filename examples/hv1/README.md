@@ -5,6 +5,11 @@
 
 ## 지금 사용할 진입점
 
+실행할 수 있는 모듈은 **10개뿐이며 아래가 전부다.** 나머지 파일은 라이브러리다
+(`test_artifacts.py`가 이 목록을 고정한다 — `main()`이 생기면 테스트가 깨진다).
+
+**캠페인 경로 5개** — 데이터에서 배포까지의 본선:
+
 | 할 일 | 실행 모듈 | 상세 절차 |
 |---|---|---|
 | 세션 검수·고정 manifest·export·통계 | `examples.hv1.pipeline` | [학습 파이프라인·최신 ROS 계약](TRAINING.md) |
@@ -12,6 +17,18 @@
 | 개별 학습 / 평가·후보 등록 | `examples.hv1.pipeline_train` / `pipeline_eval` | 복구·개별 검증용 |
 | 검수된 모델의 loopback HTTP 추론 | `examples.hv1.deploy_server` | [배포 운영](DEPLOYMENT.md) |
 | ROS shadow·감독하 실행 경계 | `ros/keti_humanoid_inference` | 같은 배포 문서의 안전 gate |
+
+**운영 도구 4개** — 본선에 끼지 않는 단독 도구:
+
+| 할 일 | 실행 모듈 |
+|---|---|
+| 기록 관측으로 배포 서버 smoke (ROS 없음) | `examples.hv1.deploy_smoke` |
+| shadow/실기 rollout 로그 요약 (영상 미적재) | `examples.hv1.shadow_eval` |
+| ROS/URDF 증거 감사 → DRAFT 프로파일 | `examples.hv1.source_contract` |
+| 원본 대 export 전수 비교 | `examples.hv1.verify_export` |
+
+**합성 검수 1개** — `examples.hv1.cli` (`demo`/`export`/`scan`/`list`/`review`/
+`manifest`/`serve-review`). profile 기반 일반 검수·합성 회귀용이며 캠페인 경로가 아니다.
 
 ```text
 ROS recorder → 원본 HDF5 + 3개 영상
@@ -84,9 +101,14 @@ Windows 테스트는 OneDrive 밖의 새 `--basetemp`를 지정한다.
 
 - [A~F 올나이트 실험 기록](docs/OVERNIGHT_20260909.md) / [재수집·N/M 운영 기록](docs/READAPT_20260910.md):
   실행 모듈은 삭제했고 두 문서는 무엇을 돌렸는지에 대한 기록으로만 남는다.
-- `workflow/cli/review/export/verify_export/demo/adapter`: profile 기반 일반 검수·합성 회귀 테스트.
-  실제 KETI HDF5+외부 영상 수집은 위 `pipeline/native` 경로를 사용한다.
-- `source_contract/ros_projection`: 소스 감사·오프라인 매핑 확인. 로봇 송신 기능 없음.
+- `cli/review/export/demo/adapter`: profile 기반 일반 검수·합성 회귀 테스트.
+  **캠페인 경로에서 도달하지 않는 섬이다** — `cli`만 진입점이고 나머지는 그 아래에
+  있다. 실제 KETI HDF5+외부 영상 수집은 `pipeline/native` 경로를 쓴다.
+  `workflow.py`는 예외로 본선이다 — `native`와 `transforms`가 `validate_profile`을 쓴다.
+- `ros_projection`: 오프라인 매핑 확인. 진입점 없는 라이브러리이며 로봇 송신 기능 없음.
+- `native.py` / `openpi_run.py`는 2026-09-11에 CLI를 잃고 라이브러리가 됐다.
+  각각의 `scan`/`export`, `check-data`/`stats`/`train`/`serve`는 은퇴한 세대의
+  진입점이었고 호출자가 없었다.
 - [초기 합성 워크플로 기록](docs/INITIAL_WORKFLOW_20260909.md): 과거 상태와 명령을 보존한 참고 문서.
   현재 운영 절차로 사용하지 않는다.
 

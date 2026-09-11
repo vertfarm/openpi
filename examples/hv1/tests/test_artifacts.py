@@ -139,16 +139,32 @@ def test_shared_snapshot_requires_complete_evidence(tmp_path, field):
         checkpoints.snapshot_identity(tmp_path)
 
 
-@pytest.mark.parametrize(
-    "module",
-    [
-        "deploy_server",
-        "pipeline",
-        "pipeline_run",
-        "pipeline_train",
-        "pipeline_eval",
-    ],
-)
+# Every module a person can run, and why it exists. Keep this list honest: the
+# only reason the surface grew to 33 commands across 12 modules by 2026-09-11 was
+# that two retired generations kept their entry points after their callers were
+# gone. `native` and `openpi_run` became libraries when theirs were removed.
+CAMPAIGN_CLIS = ("pipeline", "pipeline_run", "pipeline_train", "pipeline_eval", "deploy_server")
+OPERATOR_CLIS = ("deploy_smoke", "shadow_eval", "source_contract", "verify_export")
+SYNTHETIC_CLIS = ("cli",)
+LIBRARIES_ONLY = ("artifacts", "checkpoints", "metrics", "native", "openpi_run", "pipeline_config", "transforms")
+
+
+def test_the_entry_point_surface_is_the_declared_one():
+    """A module with a `main()` is something an operator can run, so adding one
+    is a decision. This fails on a new entry point until it is declared here."""
+    root = Path(artifacts.__file__).parent
+    runnable = set()
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if any(isinstance(node, ast.FunctionDef) and node.name == "main" for node in tree.body):
+            runnable.add(path.stem)
+    assert runnable == {*CAMPAIGN_CLIS, *OPERATOR_CLIS, *SYNTHETIC_CLIS}
+    for name in LIBRARIES_ONLY:
+        assert (root / f"{name}.py").is_file()
+        assert name not in runnable, f"{name} grew an entry point"
+
+
+@pytest.mark.parametrize("module", [*CAMPAIGN_CLIS, *OPERATOR_CLIS, *SYNTHETIC_CLIS])
 def test_existing_cli_help_never_starts_training_or_ros(module):
     repo = Path(__file__).resolve().parents[3]
     result = subprocess.run(

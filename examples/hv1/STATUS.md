@@ -35,8 +35,9 @@
 
 | 항목 | 값 |
 |---|---|
-| canonical HEAD | `8c18320` (현장 로컬. 원격 푸시 필요) |
-| 회귀 테스트 | 147개 통과 |
+| canonical HEAD | 정리 B·C1~C6 완료. 현장 로컬 커밋 17개, **원격 푸시 필요** |
+| 회귀 테스트 | 164개 통과 (`.venv/bin/python -m pytest`, 14초) |
+| 진입점 | 10모듈 / 27명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
 | repo ↔ `vla_ws` 사본 | 일치 (guardian·정지 서비스 반영 후 재확인) |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
@@ -402,10 +403,40 @@ fault가 난다.
   전부 날짜가 없다. `docs/`에 날짜 박힌 기록 3개. 링크 15개 전부 확인했다.
   README의 「유지할 계약」에 남아 있던 N/M(readapt) 항목도 트랙 계약으로 교체했다.
 
-### 남은 것
+- **C6. 진입점 정리 — 전제가 틀렸다.** "20개를 `cli.py` 디스패처로 5개로 합친다"는
+  계획이었는데, 전수 조사하니 실제 표면은 **12모듈 / 33명령**이었고 그중
+  **살아 있는 캠페인 경로는 이미 정확히 5개**였다:
+  `pipeline` / `pipeline_run` / `pipeline_train` / `pipeline_eval` / `deploy_server`.
+  (TRAINING·DEPLOYMENT·STATUS가 지시하는 명령 13개를 뽑아 확인했다.)
 
-- **C6.** 진입점 20개 → 5개 (`prepare`/`train`/`eval`/`serve`/`shadow_eval`).
-  가장 침습적이라 마지막이다. `TRAINING.md`의 명령 블록이 함께 바뀐다.
+  즉 문제는 디스패처가 많은 게 아니라 **은퇴한 세대의 진입점이 호출자가 사라진 뒤에도
+  남아 있던 것**이었다. 디스패처를 넣으면 문서화된 명령 13개가 전부 바뀌고
+  3터미널 실기 절차까지 바뀌는데 기능 이득은 0이다. **넣지 않았다.**
+
+  삭제한 죽은 CLI(둘 다 호출자 0):
+
+  | 모듈 | 지운 것 | 결과 |
+  |---|---|---|
+  | `native.py` | `main`, `scan`, `export`, `DUMMIES`/`SUSPECT`/`VALIDATION` | 348 → 157줄, 라이브러리 |
+  | `openpi_run.py` | `main`, `check_data`, `compute_stats` | 228 → 93줄, 라이브러리 |
+
+  `native.scan`/`export`는 2026-09-09 수집 경로로 `readapt`만 쓰던 것이고,
+  `pipeline._scan`/`pipeline.export`가 이를 대체하며 테스트도 있다.
+  복구는 `git show d82ca51:examples/hv1/native.py`.
+
+  남은 표면 **10모듈 / 27명령**: 캠페인 5 + 운영 도구 4(`deploy_smoke`,
+  `shadow_eval`, `source_contract`, `verify_export`) + 합성 검수 1(`cli`).
+  README에 전체 지도를 넣고, `test_artifacts.py`가 `main()`을 가진 모듈 집합을
+  선언 목록과 비교해 고정한다 — 새 진입점이 생기면 테스트가 깨진다.
+  `--help` 검사도 5개에서 10개 전부로 넓혔다(학습·ROS를 import하지 않음을 증명).
+
+### 남은 것 — 판단 필요
+
+- **합성 검수 섬(`cli`/`review`/`export`/`demo`/`adapter`)** — 캠페인 경로에서
+  도달하지 않는다. `overnight_*`와 같은 leaf island 구조지만, README가 의도적으로
+  보존해 왔고 테스트 20개(`test_workflow.py` 15, `test_policy_wire.py` 1,
+  `test_ros_projection.py` 5 중 일부)가 여기에 걸려 있다. 삭제는 감독자 판단이다.
+  `workflow.py`는 제외 — `native`/`transforms`가 `validate_profile`을 쓰는 본선이다.
 
 ## 산출물
 
