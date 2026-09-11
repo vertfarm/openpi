@@ -8,8 +8,12 @@
 
 그리퍼는 학습에 성공했고, intent 필터로 정지 오검출이 0이 됐다.
 필터가 만드는 닫기 지연도 시연 데이터 기준으로는 무해한 수준으로 확인됐다.
-**그리퍼 쪽 미해결 이슈는 실질적으로 없다.** 남은 것은 감독자 입회 제한 rollout에서
-모델이 파지 순간 팔을 제대로 세우는지 확인하는 것 하나다.
+후보 2개는 실제 로봇 관측으로 라이브 재검증까지 마쳤다.
+**그리퍼·모델 쪽 미해결 이슈는 없다.**
+
+남은 것은 전부 **실기 활성화 계약**이다 — 독립 guardian 노드와 물리 정지 서비스가
+아직 존재하지 않고, 필드 프로파일 실측값 8개가 비어 있다. 코드로 해결되는 항목이
+아니며 측정·구현·승인이 필요하다.
 
 ## 코드 상태
 
@@ -20,7 +24,8 @@
 | ROS `core.py` 소스 SHA | `ecbdd5fbfe48676b26bb7858aedb3edd92757faacc4f941d09d9e1646c7837b7` |
 | repo ↔ `vla_ws` 사본 | 일치 확인됨 (2026-09-11 감사) |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
-| 디스크 여유 | 59GiB (게이트 50GiB) |
+| 디스크 여유 | 58GiB (게이트 50GiB) |
+| 실행 코드 신원 | `pkg prefix` → `vla_ws/install`, import → `vla_ws/build`, `core.py` 해시가 서버 `adapter_core_sha256`와 일치 (2026-09-11 확인) |
 
 ## 확정된 사실 — 재검증하지 말 것
 
@@ -76,6 +81,35 @@ ALL59-2000은 hold 0.2·0.3 양쪽에서 안정적이고 학습 데이터가 넓
 hold 0.2~0.3을 선택해도 된다. 반대로 hold 0.5는 최대 오차가 0.6~0.8초로 올라가
 측정된 정지 구간을 넘어서므로 권하지 않는다.
 
+### 라이브 재검증 (2026-09-11, 실제 로봇 관측 60초 × 2)
+
+| | TODAY30-1000 @ 0.1 | ALL59-2000 @ 0.2 |
+|---|---|---|
+| shadow_safe / fault / 로봇 명령 | ✅ / 없음 / 0 | ✅ / 없음 / 0 |
+| 추론 / 목표 | 599 / 1795 | 599 / 1795 |
+| **gripper_event** | **0건** | **0건** |
+| 원시 임계 교차 | **1회** | **26회** |
+| closed_fraction | 0.0017 | 0.0329 |
+| 관절 스텝 p95 / max (rad) | 0.0265 / 0.0605 | 0.0239 / 0.0550 |
+| 지연 p95 client/server (ms) | 70.1 / 67.1 | 70.1 / 67.0 |
+
+원시 intent는 양쪽 다 1.0을 넘겨 임계값을 교차했지만 dwell이 전부 흡수했다.
+노이즈 1회가 fault로 이어지던 경로가 실제로 막힌 것을 확인했다.
+
+**TODAY30-1000의 원시 신호가 훨씬 깨끗하다** — 같은 정지 장면에서 임계 교차가
+1회 대 26회다. 오프라인 스윕 순위를 라이브 관측이 독립적으로 재확인했다.
+단 이 수치는 정지 장면 오검출률이며 파지 능력 순위가 아니다(확정 사실 3).
+
+### 서버 기동 시 주의
+
+`deploy_server`는 `--registry`가 없으면
+`first deployment is restricted to verified C/F-5000`으로 **거부한다.**
+두 트랙 스냅샷을 쓰려면 반드시 다음을 붙인다.
+
+```
+--registry <campaign>/checkpoint_registry.json
+```
+
 ## 사용하지 말 것
 
 **`TODAY30_FT`, `ALL59_FT` 스냅샷 4개 (2026-09-10 야간 생성).**
@@ -87,6 +121,24 @@ hold 0.2~0.3을 선택해도 된다. 반대로 hold 0.5는 최대 오차가 0.6~
 
 결과적으로 FT 계열의 전환 4종 0인 최선은 `TODAY30_FT-1000 @ 0.2`의 **0.433s**로,
 기존 `TODAY30-1000 @ 0.1`의 **0.333s**보다 나쁘다. 약 20GiB와 GPU 16분을 쓰고 후퇴했다.
+
+## 실기 활성화 공백 — 2026-09-11 실측 확인
+
+`checkpoint_registry.json`의 모든 항목이 `status: SHADOW_ONLY`,
+`robot_motion_authorized: false`다. 아래가 채워지기 전에는 live로 전환할 수 없고,
+`LiveGate`가 구조적으로 거부한다. 상세 계약은 [DEPLOYMENT.md](DEPLOYMENT.md)의
+"실기 활성화에 필요한 외부 계약"에 있다.
+
+| 항목 | 현재 상태 | 성격 |
+|---|---|---|
+| `/hv1_vla/guardian` 발행자 | **존재하지 않음.** 코드에는 구독·검증 측(`node.py`, `core.py`)만 있고 발행하는 노드가 없다. 테스트의 `guardian_node="/fake"`는 실기 사용 금지 | 구현 |
+| 물리 정지 서비스 | **존재하지 않음.** 라이브 ROS 그래프의 서비스 109개 중 stop/estop/halt/emergency 해당 없음 | 구현 + 배선 |
+| `approved`, `review_id`, `qualification_evidence` | 빈 값 | 승인 |
+| `joint_min`, `joint_max`, `max_step`, `max_tracking_error`, `max_velocity`, `max_acceleration`, `start_q`, `start_tolerance` | 전부 `null` | 실측 |
+
+**실측 8개를 시연 데이터에서 유도하지 말 것.** `LiveGate` docstring이 명시한다 —
+*"Physical limits are required inputs, never inferred from demonstrations."*
+데모 범위는 안전 한계가 아니다.
 
 ## 미결 결정 — 감독자 몫
 
@@ -101,11 +153,14 @@ hold 0.2~0.3을 선택해도 된다. 반대로 hold 0.5는 최대 오차가 0.6~
 
 ## 다음 단계
 
-1. 손 자세 `mode 2` → `set_open 0.6`, `rel_angle` 기준값 대조
-2. OOD 게이트 통과 확인
-3. 재빌드된 코드로 무송신 live shadow (감독자 입회)
-4. 후보 선택
-5. 제한 실기 rollout — 파지 직전·직후 팔 속도를 기록해 확정 사실 6의 시연 분포와
+1. ~~손 자세 `mode 2` → `set_open 0.6`, `rel_angle` 기준값 대조~~ — 완료 (2026-09-11)
+2. ~~OOD 게이트 통과 확인~~ — 완료. 단 `joint_30`이 원시 q01(1.5509)보다 낮은
+   1.5463이라 ±0.05 마진 덕에 통과했다. 마진을 줄이면 걸린다.
+3. ~~재빌드된 코드로 무송신 live shadow~~ — 완료, 후보 2개 모두 통과
+4. **후보 선택** — 현재 근거로는 TODAY30-1000 @ hold 0.1이 1순위
+5. **실기 활성화 공백 해소** ← 지금 여기. guardian 구현, 물리 정지 서비스 배선,
+   실측 8개, 승인. 위 "실기 활성화 공백" 표 참조
+6. 제한 실기 rollout — 파지 직전·직후 팔 속도를 기록해 확정 사실 6의 시연 분포와
    대조한다. 폐루프에서 감속·정지가 재현되는지가 닫기 지연 허용의 전제다.
 
 ## 보류 중인 정리 작업
@@ -127,6 +182,8 @@ rollout과 그리퍼 필터 회귀가 끝난 뒤에 착수한다. 지금 하지 
 | `evaluations/overnight_grasp_intent_report_v1.json` | `8a6ab05ea140f33093e4e5bdb23e619e4f51d3fb82de540387956b6aee25d65c` |
 | `evaluations/grasp_filter_sweep_v1.json` | `981b9b474a0b037024abf96126e2f2878362390a2dc903fe67b4820d2b8fd908` |
 | `evaluations/grasp_filter_finetune_sweep_v1.json` | `023b7c7a7a617f8592a161af8074ebe0fbebe767e8cda9f8837b4c325f397fbb` |
+| `shadow/hv1_prep_today30_1000_h010_r1/summary.json` | `eca3cf9c95583c4676bea9485f778c1043cf5ea17227e16b9fefb00eaef67b7c` |
+| `shadow/hv1_prep_all59_2000_h020_r1/summary.json` | `f4661dd16736dae1185692659a7375e01b32bb0d502b2c531331a3509cac0c94` |
 
 부수 디렉터리: `evaluations/intent_series/`, `static_intent_series/`,
 `source_identity_prebuild/`. 시작 자세가 올바른 shadow 로그는
