@@ -387,13 +387,31 @@ gap은 그대로 0이고 코사인은 오히려 0.9974 → 0.9985로 미세하�
 | `TODAY30_NOISE10` | **V2** — `state_noise_sigma=1.0` |
 | `TODAY30_CLOSE45_NOISE10` | **V3** — V1 + V2 |
 
+**실행은 명령 하나다.** `pipeline_run --ablations`가 큐 전체를 순차로 돌린다 —
+스케줄 생성 → 학습 → teacher-forced 평가 → 교차지표 2그룹 → 옵티마이저 상태 정리.
+GPU lock이 1개라 자연히 직렬이고, `ablation_result.json`에 비교표를 쓴다.
+
 ```
-python -B -m examples.hv1.pipeline ablation-schedules --campaign "$CAMPAIGN"
-python -B -m examples.hv1.pipeline_train --campaign "$CAMPAIGN" \
-  --experiment TODAY30_NOISE10 --deadline <미래 ISO8601+offset> --allow-gpu-run
-python -B -m examples.hv1.pipeline_eval evaluate-cross-modal --campaign "$CAMPAIGN" \
-  --snapshot "$CAMPAIGN/snapshots/TODAY30_NOISE10/step_002000" --allow-gpu-run
+python -B -m examples.hv1.pipeline_run --campaign "$CAMPAIGN" \
+  --ablations --deadline <미래 ISO8601+offset> --allow-gpu-run
 ```
+
+**재개 가능하다.** 각 실험은 result·teacher-forced 평가·교차지표 2개·restart 정리가
+모두 있으면 건너뛴다. 중단됐으면 그냥 다시 실행하면 빠진 단계부터 이어간다.
+V1은 이미 학습이 끝나 있으므로 teacher-forced 평가만 채우고 넘어간다.
+
+**절제 실험은 registry에 등록하지 않는다** — 배포 후보가 아니므로 `register` 단계가
+의도적으로 없다.
+
+**원격(Windows)에서 띄우기.** SSH 터널이 이미 열려 있다(git fetch가 그 위로 돈다).
+GPU·데이터가 현장에만 있으므로 Windows는 **띄우고 읽기만** 한다.
+
+```
+ssh -p 2223 keti@127.0.0.1 'cd ~/workspace/openpi-hv1 && setsid nohup .venv/bin/python -B -m examples.hv1.pipeline_run --campaign ~/workspace/hv1-vla-runtime/two-track-20260910-r3 --ablations --deadline 2026-09-14T12:00:00+09:00 --allow-gpu-run > ~/workspace/hv1-vla-runtime/two-track-20260910-r3/ablations.log 2>&1 < /dev/null & echo launched'
+```
+
+`setsid`와 `< /dev/null`이 없으면 ssh 세션이 끊길 때 학습이 같이 죽는다.
+진행 확인은 `tail`, 결과는 `ablation_result.json`이다.
 
 **실기 안전 — 실제 캠페인으로 확인했다.**
 

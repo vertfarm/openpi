@@ -108,6 +108,23 @@ recipe**: `pipeline_config.configure` re-derives a snapshot's recipe and compare
 it, so changing `recipe("TODAY30")` makes `deploy_server` refuse TODAY30-1000 -
 the checkpoint the field runs.
 
+Run the whole queue with one command. It writes any missing schedule, trains,
+evaluates teacher-forced, measures the cross-modal gap on both diagnostic
+groups, and reclaims the optimizer state, one experiment at a time because there
+is a single GPU lock. The comparison table lands in `ablation_result.json`.
+
+```bash
+python -B -m examples.hv1.pipeline_run --campaign "$CAMPAIGN" \
+  --ablations --deadline <future ISO8601 with offset> --allow-gpu-run
+```
+
+It resumes: an experiment is skipped once its result, teacher-forced evaluation,
+both cross-modal records and its restart cleanup are on disk, so an interrupted
+run continues by being started again. Ablations are never registered - they are
+not deployment candidates and there is no `register` step here.
+
+Single steps, when you want one experiment rather than the queue:
+
 ```bash
 python -B -m examples.hv1.pipeline ablation-schedules --campaign "$CAMPAIGN"
 python -B -m examples.hv1.pipeline_train --campaign "$CAMPAIGN" \
@@ -116,6 +133,9 @@ python -B -m examples.hv1.pipeline_eval evaluate-cross-modal \
   --campaign "$CAMPAIGN" --snapshot "$CAMPAIGN/snapshots/TODAY30_CLOSE45/step_002000" \
   --allow-gpu-run
 ```
+
+Running it standalone skips the cleanup that `--ablations` does, so about 30 GiB
+of optimizer state stays under `restarts/`.
 
 Ablations keep one snapshot rather than four. 2,000 updates measured 1,006 s, so
 time is not the constraint; a snapshot is 4.9 GiB and disk is.

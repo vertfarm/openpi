@@ -510,14 +510,28 @@ def write_schedules(campaign):
 
 
 def write_ablation_schedules(campaign):
+    """Write any ablation schedule that is missing; verify the ones already there.
+
+    Re-runnable on purpose: the orchestrator calls this when resuming, and an
+    existing schedule is evidence rather than an obstacle - but only if it still
+    matches what the recipe derives, otherwise the run would train on a plan
+    nobody approved.
+    """
     campaign = Path(campaign).resolve()
     manifest = verify_campaign(campaign)
     result = {}
     for name in ABLATIONS:
         value = recipe(name, manifest["sha256"], TARGET_STEPS)
         schedule = sample_schedule(manifest, name, value["steps"] * value["batch_size"])
-        write_new_json(campaign / f"sampler_{name}.json", schedule)
-        result[name] = dict(samples=schedule["samples"], sha256=schedule["sha256"])
+        path = campaign / f"sampler_{name}.json"
+        if path.exists():
+            if checked(path) != schedule:
+                raise ContractError(f"existing sampler_{name}.json differs from the approved schedule")
+            state = "verified"
+        else:
+            write_new_json(path, schedule)
+            state = "written"
+        result[name] = dict(samples=schedule["samples"], sha256=schedule["sha256"], state=state)
     return result
 
 

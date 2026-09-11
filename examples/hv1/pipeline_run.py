@@ -92,6 +92,122 @@ def _evaluate(campaign, name, step, *, reference=None, smoke=False):
     _run(*args)
 
 
+def _cross_modal(campaign, name, step, group):
+    snapshot = campaign / "snapshots" / name / f"step_{step:06d}"
+    _run(
+        "-m",
+        "examples.hv1.pipeline_eval",
+        "evaluate-cross-modal",
+        "--campaign",
+        str(campaign),
+        "--snapshot",
+        str(snapshot),
+        "--group",
+        group,
+        "--allow-gpu-run",
+    )
+
+
+def _cross_modal_path(campaign, name, step, group):
+    offset = pipeline_eval_offset()
+    return campaign / "evaluations/cross_modal" / f"{name}_{step:06d}_{group}_p{offset:+03d}.json"
+
+
+def pipeline_eval_offset():
+    from .pipeline_eval import GRASP_ANCHOR_OFFSET
+
+    return GRASP_ANCHOR_OFFSET
+
+
+def execute_ablations(campaign, deadline):
+    """Train and measure every queued ablation, one at a time, resumably.
+
+    Ablations answer why a checkpoint behaves as it does, so they are never
+    registered and never become deployment candidates - there is no `register`
+    step here on purpose. Each one is skipped when its result, both cross-modal
+    records and its restart cleanup are already on disk, so an interrupted run
+    resumes by being started again.
+    """
+    campaign = Path(campaign).resolve()
+    manifest = pipeline.verify_campaign(campaign, raw=True)
+    stop = datetime.fromisoformat(deadline)
+    if stop.tzinfo is None or stop.timestamp() <= time.time():
+        raise ContractError("future timezone-aware deadline required")
+    groups = ("today_fixed6", "old_fixed6")
+    started, done = time.time(), []
+    for name in pipeline.ABLATIONS:
+        recipe = pipeline.recipe(name, manifest["sha256"])
+        step = recipe["snapshots"][-1]
+        result_path = campaign / "runs" / name / "result.json"
+        finished = (
+            result_path.is_file()
+            and read_json(result_path).get("complete") is True
+            and (campaign / "evaluations" / f"{name}_{step:06d}.json").is_file()
+            and all(_cross_modal_path(campaign, name, step, g).is_file() for g in groups)
+            and _cleanup_complete(campaign, Path("restarts/pi05_hv1") / name)
+        )
+        if finished:
+            done.append(name)
+            continue
+        sampler = campaign / f"sampler_{name}.json"
+        if not sampler.is_file():
+            pipeline.write_ablation_schedules(campaign)
+        if not (result_path.is_file() and read_json(result_path).get("complete") is True):
+            _train(campaign, name, deadline)
+        if read_json(result_path).get("complete") is not True:
+            raise ContractError(f"{name} stopped before its target")
+        # Teacher-forced first so a regression is visible next to the gap.
+        if not (campaign / "evaluations" / f"{name}_{step:06d}.json").is_file():
+            _evaluate(campaign, name, step)
+        for group in groups:
+            if not _cross_modal_path(campaign, name, step, group).is_file():
+                _cross_modal(campaign, name, step, group)
+        _safe_generated_cleanup(
+            campaign,
+            Path("restarts/pi05_hv1") / name,
+            result_path,
+            "ablation complete: target reached, snapshot saved, optimizer state regenerable",
+        )
+        done.append(name)
+    rows = []
+    for name in done:
+        recipe = pipeline.recipe(name, manifest["sha256"])
+        step = recipe["snapshots"][-1]
+        for group in groups:
+            record = read_json(_cross_modal_path(campaign, name, step, group))
+            rows.append(
+                dict(
+                    experiment=name,
+                    step=step,
+                    group=group,
+                    changed={k: v for k, v in pipeline.ABLATIONS[name].items() if k != "track"},
+                    diagonal_intent_median=record["diagonal_intent_median"],
+                    intent_scene_gap=record["intent_scene_gap"],
+                    direction_cosine_median=record["direction_cosine_median"],
+                )
+            )
+    result = dict(
+        schema="hv1_ablation_sweep_v1",
+        manifest_sha256=manifest["sha256"],
+        baseline="snapshots/TODAY30/step_002000",
+        baseline_note="TODAY30-2000 measured gap -0.00024, direction cosine 0.9974 on today_fixed6",
+        rows=rows,
+        completed=done,
+        elapsed_seconds=time.time() - started,
+        robot_commands_sent=0,
+        registered_for_deployment=False,
+        threshold_applied=False,
+        note=(
+            "A gap near zero with a direction cosine near one means the policy "
+            "answered from the state and ignored the scene. No threshold is "
+            "applied; a supervisor reads the table."
+        ),
+        complete=done == list(pipeline.ABLATIONS),
+    )
+    atomic_json(campaign / "ablation_result.json", result)
+    return result
+
+
 def _cleanup_complete(campaign, relative):
     journal = Path(campaign) / "cleanup" / ("_".join(relative.parts) + ".json")
     return journal.is_file() and read_json(journal).get("complete") is True
@@ -211,11 +327,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", required=True)
     parser.add_argument("--deadline", required=True)
-    parser.add_argument("--reviewer", required=True)
+    parser.add_argument("--reviewer", help="required for the campaign; ablations register nothing")
+    parser.add_argument(
+        "--ablations",
+        action="store_true",
+        help="train and measure pipeline.ABLATIONS instead of the campaign tracks",
+    )
     parser.add_argument("--allow-gpu-run", action="store_true")
     args = parser.parse_args()
     if not args.allow_gpu_run:
         parser.error("explicit --allow-gpu-run required; never authorizes robot motion")
+    if args.ablations:
+        print(json.dumps(execute_ablations(args.campaign, args.deadline)))
+        return
+    if not args.reviewer:
+        parser.error("--reviewer is required for the campaign")
     print(json.dumps(execute(args.campaign, args.deadline, args.reviewer)))
 
 

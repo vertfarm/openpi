@@ -58,6 +58,9 @@ def manifest():
     return pipeline.sealed(
         {
             "schema": pipeline.SCHEMA,
+            # `verify_campaign` checks the profile, so a fixture without one is
+            # not a manifest any real code path would accept.
+            "profile": native.profile(),
             "episodes": episodes,
             "tracks": {
                 "TODAY30": {"episode_ids": [e["id"] for e in episodes if e["cohort"] == "today"]},
@@ -476,6 +479,41 @@ def test_an_ablation_schedule_follows_its_own_phase_weights():
     }
     assert schedule["track"] == "TODAY30"
     assert len(schedule["train_episode_ids"]) == 30
+
+
+def test_the_runner_looks_for_the_file_the_evaluator_writes(tmp_path):
+    """If these two disagreed the ablation runner would never see its own work
+    and would retrain forever. The evaluator's name is built here from the same
+    pieces, so a change to either has to change both."""
+    from examples.hv1.pipeline_run import _cross_modal_path
+
+    offset = pipeline_eval.GRASP_ANCHOR_OFFSET
+    expected = f"TODAY30_NOISE10_002000_today_fixed6_p{offset:+03d}.json"
+    assert _cross_modal_path(tmp_path, "TODAY30_NOISE10", 2000, "today_fixed6").name == expected
+    source = Path(pipeline_eval.__file__).read_text(encoding="utf-8")
+    assert "_{group}_p{frame_offset:+03d}.json" in source
+
+
+def test_ablation_schedules_can_be_written_twice_but_not_changed_underneath(tmp_path):
+    """The orchestrator calls this again when resuming, so an existing schedule
+    has to be accepted - unless it stopped matching the recipe."""
+    value = manifest()
+    write_new_json(tmp_path / "manifest.json", value)
+    first = pipeline.write_ablation_schedules(tmp_path)
+    assert {row["state"] for row in first.values()} == {"written"}
+    again = pipeline.write_ablation_schedules(tmp_path)
+    assert {row["state"] for row in again.values()} == {"verified"}
+    assert [row["sha256"] for row in first.values()] == [row["sha256"] for row in again.values()]
+
+    name = next(iter(pipeline.ABLATIONS))
+    tampered = pipeline.checked(tmp_path / f"sampler_{name}.json")
+    tampered.pop("sha256")
+    tampered["records"] = tampered["records"][:-100]
+    # Validly sealed, so `checked` accepts it - the mismatch has to be caught by
+    # comparing against the schedule the recipe derives, not by the seal.
+    (tmp_path / f"sampler_{name}.json").write_text(json.dumps(pipeline.sealed(tampered)), encoding="utf-8")
+    with pytest.raises(ContractError, match="differs from the approved schedule"):
+        pipeline.write_ablation_schedules(tmp_path)
 
 
 def test_the_default_anchor_clears_the_measured_intent_latency():
