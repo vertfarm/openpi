@@ -79,12 +79,21 @@ python -B -m examples.hv1.pipeline_eval evaluate-cross-modal \
   --allow-gpu-run
 ```
 
-It writes `evaluations/cross_modal/<experiment>_<step>_<group>.json` and reports
-two numbers. `intent_scene_gap` is the diagonal intent median minus the
-off-diagonal one: near zero means swapping in a completely different scene did
-not change the grasp decision. `direction_cosine_median` near 1.0 means the
-intended arm direction did not turn either. TODAY30-1000 scored a gap of 0.0
-with both medians at 1.021.
+It writes `evaluations/cross_modal/<experiment>_<step>_<group>_p<offset>.json`
+and reports two numbers. `intent_scene_gap` is the diagonal intent median minus
+the off-diagonal one: near zero means swapping in a completely different scene
+did not change the grasp decision. `direction_cosine_median` near 1.0 means the
+intended arm direction did not turn either.
+
+**Read `diagonal_intent_median` first.** The gap only means something while that
+is high. The policy raises intent a few frames *after* the recorded grasp - +1 to
++7 across the twelve diagnostic episodes - so anchoring on the grasp frame itself
+compares two near-zero numbers and reports a small gap for the wrong reason.
+`--frame-offset` defaults to 8 to clear that, and the offset is part of the
+filename because a different anchor is a different measurement.
+
+Measured 2026-09-11: both deployment candidates, both diagnostic groups, gap
+within +-0.0005 and direction cosine 0.996-0.999. Neither uses its cameras.
 
 **No threshold is applied and none is stored.** The command records the numbers;
 a supervisor reads them. It needs the GPU lock, so stop `deploy_server` first.

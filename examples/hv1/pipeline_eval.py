@@ -217,7 +217,19 @@ def _cross_modal_cases(manifest, dataset, offsets, group, frame_offset):
     return cases
 
 
-def evaluate_cross_modal(campaign, snapshot, *, group="today_fixed6", frame_offset=0):
+GRASP_ANCHOR_OFFSET = 8
+"""Frames past the recorded grasp to anchor a cross-modal case on.
+
+Measured, not chosen: across all twelve diagnostic episodes the TODAY30-1000
+intent crosses 0.5 between +1 and +7 frames after the recorded close, sitting at
+0.003-0.033 on the close frame itself. Anchoring at +0 therefore compares two
+near-zero numbers and reports a meaningless gap. +8 is the first frame clear of
+every episode's latency. Check `diagonal_intent_median` in the record: if it is
+near zero the anchor missed and the gap says nothing.
+"""
+
+
+def evaluate_cross_modal(campaign, snapshot, *, group="today_fixed6", frame_offset=GRASP_ANCHOR_OFFSET):
     """Does the policy answer from the scene, or from the arm?
 
     Teacher-forced replay cannot tell: it hands the policy the state that
@@ -279,12 +291,20 @@ def evaluate_cross_modal(campaign, snapshot, *, group="today_fixed6", frame_offs
         robot_commands_sent=0,
         closed_loop=False,
         threshold_applied=False,
+        interpretation=(
+            "intent_scene_gap only means something while diagonal_intent_median is "
+            "high. The policy raises intent a few frames after the recorded grasp, so "
+            "an anchor at frame_offset 0 compares two near-zero numbers and reports a "
+            "gap that is small for the wrong reason."
+        ),
         complete=True,
         **matrix,
     )
     directory = campaign / "evaluations" / "cross_modal"
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{recipe['name']}_{record['step']:06d}_{group}.json"
+    # The offset is part of the identity: the same snapshot anchored at a
+    # different frame is a different measurement, not a rewrite of this one.
+    path = directory / f"{recipe['name']}_{record['step']:06d}_{group}_p{frame_offset:+03d}.json"
     write_new_json(path, result)
     return {
         "complete": True,
@@ -743,8 +763,8 @@ def main():
     parser.add_argument(
         "--frame-offset",
         type=int,
-        default=0,
-        help="frames from the grasp to anchor each case on; default 0",
+        default=GRASP_ANCHOR_OFFSET,
+        help=f"frames past the recorded grasp to anchor each case on; default {GRASP_ANCHOR_OFFSET}",
     )
     args = parser.parse_args()
     if args.command in ("evaluate", "evaluate-intents"):

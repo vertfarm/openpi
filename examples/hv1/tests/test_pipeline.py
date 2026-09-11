@@ -354,6 +354,12 @@ def test_cross_modal_offset_shifts_the_anchor_and_stays_inside_the_episode():
         assert {c["frame"] for c in clamped} == {expected}
 
 
+def test_the_default_anchor_clears_the_measured_intent_latency():
+    """TODAY30-1000 raises intent +1..+7 frames after the recorded grasp, so an
+    anchor at +0 compares two near-zero numbers. The default must be past that."""
+    assert pipeline_eval.GRASP_ANCHOR_OFFSET > 7
+
+
 def test_cross_modal_refuses_a_group_it_cannot_cross():
     value = manifest()
     with pytest.raises(ContractError, match="at least two diagnostic episodes"):
