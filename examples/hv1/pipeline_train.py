@@ -246,7 +246,11 @@ def train(campaign, name, deadline, *, resume=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", required=True)
-    parser.add_argument("--experiment", choices=["SMOKE", *pipeline.TRACKS, *pipeline.FILTER_FINETUNES], required=True)
+    parser.add_argument(
+        "--experiment",
+        choices=["SMOKE", *pipeline.TRACKS, *pipeline.FILTER_FINETUNES, *pipeline.ABLATIONS],
+        required=True,
+    )
     parser.add_argument("--deadline", required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--allow-gpu-run", action="store_true")

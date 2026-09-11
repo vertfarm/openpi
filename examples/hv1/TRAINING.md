@@ -98,6 +98,28 @@ within +-0.0005 and direction cosine 0.996-0.999. Neither uses its cameras.
 **No threshold is applied and none is stored.** The command records the numbers;
 a supervisor reads them. It needs the GPU lock, so stop `deploy_server` first.
 
+## Ablations
+
+Experiments that ask *why* a checkpoint behaves as it does live in
+`pipeline.ABLATIONS`. Each is a separate experiment name whose entry lists the
+only fields it changes, so the comparison against its track stays one-variable,
+and a test enforces that. **Never answer such a question by editing a track's
+recipe**: `pipeline_config.configure` re-derives a snapshot's recipe and compares
+it, so changing `recipe("TODAY30")` makes `deploy_server` refuse TODAY30-1000 -
+the checkpoint the field runs.
+
+```bash
+python -B -m examples.hv1.pipeline ablation-schedules --campaign "$CAMPAIGN"
+python -B -m examples.hv1.pipeline_train --campaign "$CAMPAIGN" \
+  --experiment TODAY30_CLOSE45 --deadline <future ISO8601 with offset> --allow-gpu-run
+python -B -m examples.hv1.pipeline_eval evaluate-cross-modal \
+  --campaign "$CAMPAIGN" --snapshot "$CAMPAIGN/snapshots/TODAY30_CLOSE45/step_002000" \
+  --allow-gpu-run
+```
+
+Ablations keep one snapshot rather than four. 2,000 updates measured 1,006 s, so
+time is not the constraint; a snapshot is 4.9 GiB and disk is.
+
 ## Latest ROS interface
 
 - observation: `/kh/upper_body/observation/state/joint_states`

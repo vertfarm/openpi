@@ -46,31 +46,32 @@
 | canonical HEAD | `dda0e77` — 정리 B·C1~C6 완료. 원격 브랜치까지 fast-forward 푸시됨 |
 | 회귀 테스트 | 164개 통과 (`.venv/bin/python -m pytest examples/hv1/tests`, 14초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
-| 진입점 | 10모듈 / 27명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
+| 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
 | repo ↔ `vla_ws` 사본 | `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
 | 디스크 여유 | **56GiB** (게이트 50GiB). 아래 「디스크」 참조 |
 | 실행 코드 신원 | `pkg prefix` → `vla_ws/install`, import → `vla_ws/build`, `core.py` 해시가 서버 `adapter_core_sha256`와 일치 (2026-09-11 확인) |
 
-### 지금 떠 있는 것 — 정리 후에도 계속 살아 있다
+### 세션 종료 시점의 실행 상태 (2026-09-11 저녁)
 
-정리 커밋 6개는 `core.py`를 건드리지 않았으므로 **아래를 재시작하지 않았고, 할 필요도 없다.**
-`/health`로 실측 확인했다.
+**로봇 관련 프로세스는 전부 내려가 있다.** 실측으로 확인했다.
 
-| 프로세스 | 경과 | 상태 |
-|---|---|---|
-| `deploy_server` TODAY30-1000 | 1h51m | `ready=true`, `denoise=10`, `robot_commands_sent=0`, GPU lock 보유 |
-| `guardian` (컨테이너, r3 프로파일) | 1h20m | 20Hz 발행, `--workspace-clear --hardware-watchdog --release-allowed` |
-| `vla_client` | — | **없음. 로봇은 어떤 명령도 받지 않는다** |
+| 대상 | 상태 |
+|---|---|
+| `deploy_server` | 없음 — 교차지표 실행을 위해 GPU lock 해제하려고 정지 |
+| `guardian` | 없음 |
+| `vla_client` | 없음 |
+| 컨테이너 ROS 노드 | `rqt_gui_cpp_node` 하나뿐. 제어 스택 없음 = **팔 토크 없음** |
+| 컨테이너 | `keti_humanoid_ros2_jazzy` Up, 유휴 |
 
-- 서버 `adapter_core_sha256` = `59775ee4…` = 현재 repo·`vla_ws`의 `core.py`. **세 곳이 일치한다.**
-- 서버 `norm_stats_sha256` = `b41b496d…`. 이름 변경 후 `pipeline_eval.registered_config`로
-  같은 registry를 다시 읽어 동일 값을 확인했다.
-- **guardian이 1시간 넘게 `workspace_clear=true`를 계속 발행하고 있다.** guardian에는
-  로봇 publisher가 없으므로 스스로 움직일 수는 없지만, 이 증거는 **이미 낡았다.**
-  다음 live client를 띄우기 전에 guardian을 재시작해 현재 작업 공간으로 다시 검수한다.
-- 서버는 GPU lock을 쥐고 있다. **학습·평가를 시작하려면 먼저 서버를 내려야 한다.**
+정리 커밋들은 `core.py`를 건드리지 않았고, 정지 직전 서버 `/health`의
+`adapter_core_sha256` = `59775ee4…` 가 repo·`vla_ws` 사본과 **세 곳 모두 일치**함을
+확인했다. 이름 변경(C4)은 배포를 깨지 않았다. **재빌드·재시작 불필요.**
+
+**실기를 다시 할 때의 순서**: `deploy_server` 기동 → **guardian 재시작** → `vla_client`.
+guardian을 반드시 새로 띄운다 — `workspace_clear`는 사람이 검수한 증거이고 이전 세션의
+것은 낡았다.
 
 ### 디스크 — 가장 큰 운영 레버
 
@@ -569,7 +570,7 @@ fault가 난다.
   `pipeline._scan`/`pipeline.export`가 이를 대체하며 테스트도 있다.
   복구는 `git show d82ca51:examples/hv1/native.py`.
 
-  남은 표면 **10모듈 / 27명령**: 캠페인 5 + 운영 도구 4(`deploy_smoke`,
+  남은 표면 **10모듈 / 28명령**: 캠페인 5 + 운영 도구 4(`deploy_smoke`,
   `shadow_eval`, `source_contract`, `verify_export`) + 합성 검수 1(`cli`).
   README에 전체 지도를 넣고, `test_artifacts.py`가 `main()`을 가진 모듈 집합을
   선언 목록과 비교해 고정한다 — 새 진입점이 생기면 테스트가 깨진다.

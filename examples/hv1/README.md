@@ -14,7 +14,8 @@
 |---|---|---|
 | 세션 검수·고정 manifest·export·통계 | `examples.hv1.pipeline` | [학습 파이프라인·최신 ROS 계약](TRAINING.md) |
 | smoke → TODAY30·ALL59 학습·평가 순차 실행 | `examples.hv1.pipeline_run` | 같은 문서의 순차 실행 |
-| 개별 학습 / 평가·후보 등록 | `examples.hv1.pipeline_train` / `pipeline_eval` | 복구·개별 검증용 |
+| 개별 학습 / 절제 실험 | `examples.hv1.pipeline_train` | 복구·개별 검증용 |
+| 평가·후보 등록 / **교차 모달 점검** | `examples.hv1.pipeline_eval` | 같은 문서의 「카메라를 쓰는가」 |
 | 검수된 모델의 loopback HTTP 추론 | `examples.hv1.deploy_server` | [배포 운영](DEPLOYMENT.md) |
 | ROS shadow·감독하 실행 경계 | `ros/keti_humanoid_inference` | 같은 배포 문서의 안전 gate |
 
