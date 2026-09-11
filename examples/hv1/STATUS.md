@@ -11,18 +11,18 @@
 후보 2개는 실제 로봇 관측으로 라이브 재검증까지 마쳤다.
 **그리퍼·모델 쪽 미해결 이슈는 없다.**
 
-남은 것은 전부 **실기 활성화 계약**이다 — 독립 guardian 노드와 물리 정지 서비스가
-아직 존재하지 않고, 필드 프로파일 실측값 8개가 비어 있다. 코드로 해결되는 항목이
-아니며 측정·구현·승인이 필요하다.
+**실기 활성화 공백은 2026-09-11에 채워졌다.** guardian 노드, 토크를 유지하는
+소프트웨어 정지, 승인된 필드 프로파일이 모두 있고 실기에서 동작을 확인했다.
+남은 것은 첫 감독하 rollout 실행과, 그 로그로만 확정할 수 있는 값 두 개다.
 
 ## 코드 상태
 
 | 항목 | 값 |
 |---|---|
-| canonical HEAD | `1075f41` (현장·remote 동일, 트리 clean) |
-| 회귀 테스트 | 136개 통과 |
-| ROS `core.py` 소스 SHA | `ecbdd5fbfe48676b26bb7858aedb3edd92757faacc4f941d09d9e1646c7837b7` |
-| repo ↔ `vla_ws` 사본 | 일치 확인됨 (2026-09-11 감사) |
+| canonical HEAD | `3a061cd` (현장 로컬. 원격 푸시 필요) |
+| 회귀 테스트 | 144개 통과 |
+| ROS `core.py` 소스 SHA | `9a4a9bae3b9d8031225f4f77bd1853f5aaf0f0367d89475586dca31efd7e5a71` |
+| repo ↔ `vla_ws` 사본 | 일치 (guardian·정지 서비스 반영 후 재확인) |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
 | 디스크 여유 | 58GiB (게이트 50GiB) |
 | 실행 코드 신원 | `pkg prefix` → `vla_ws/install`, import → `vla_ws/build`, `core.py` 해시가 서버 `adapter_core_sha256`와 일치 (2026-09-11 확인) |
@@ -183,23 +183,59 @@ hold 0.2~0.3을 선택해도 된다. 반대로 hold 0.5는 최대 오차가 0.6~
 결과적으로 FT 계열의 전환 4종 0인 최선은 `TODAY30_FT-1000 @ 0.2`의 **0.433s**로,
 기존 `TODAY30-1000 @ 0.1`의 **0.333s**보다 나쁘다. 약 20GiB와 GPU 16분을 쓰고 후퇴했다.
 
-## 실기 활성화 공백 — 2026-09-11 실측 확인
+## 실기 활성화 — 2026-09-11 구축 완료
 
-`checkpoint_registry.json`의 모든 항목이 `status: SHADOW_ONLY`,
-`robot_motion_authorized: false`다. 아래가 채워지기 전에는 live로 전환할 수 없고,
-`LiveGate`가 구조적으로 거부한다. 상세 계약은 [DEPLOYMENT.md](DEPLOYMENT.md)의
-"실기 활성화에 필요한 외부 계약"에 있다.
+`checkpoint_registry.json`은 여전히 `SHADOW_ONLY`이지만, live 전환을 막던
+공백은 채워졌다. 계약은 [DEPLOYMENT.md](DEPLOYMENT.md) 참조.
 
-| 항목 | 현재 상태 | 성격 |
+| 항목 | 상태 |
+|---|---|
+| `/hv1_vla/guardian` 발행자 | ✅ `guardian.py`. 실기에서 **20.000Hz** 발행 확인 |
+| 소프트웨어 정지 | ✅ `node.py`의 `hold_here` + `/hv1_vla/stop` |
+| 필드 프로파일 | ✅ `hv1-vla-runtime/two-track-20260910-r3/deploy_field_profile_20260911.json` |
+| 물리 정지 | 감독자가 파지하는 전원 차단 E-stop. **소프트웨어에서 호출 불가** |
+
+**안전 층 순서**
+
+```
+자동:  LiveGate 7종 + live_health 6종 + 스케줄러 3종 → hold_here (제자리 정지, 토크 유지)
+수동1: guardian 터미널 Ctrl-C → 100ms 내 같은 정지
+수동2: /hv1_vla/stop 호출 → 같은 정지
+최후:  E-stop 전원 차단 → 낙하 (브레이크 없는 QDD. 이 장비는 낙하 허용)
+```
+
+**정지가 토크를 빼지 않는 이유.** 팔이 브레이크 없는 QDD라 전원 차단은 정지가
+아니라 낙하다. 그래서 fault 대응은 현재 실측 위치를 목표로 발행해 토크를 유지한다.
+명령만 끊으면 마지막 setpoint가 한 스텝 앞서 있어 그만큼 더 가는데, `hold_here`가
+그 잔여 이동을 없앤다.
+
+**guardian이 정직한 이유.** 로봇 토픽에 퍼블리셔를 하나도 만들지 않는다 — 팔에
+영향을 줄 수 있는 유일한 경로가 조용해지는 것이다. 소프트웨어로 증명할 수 없는
+`workspace_clear`, `hardware_watchdog_ready`, `release_allowed`는 **기본 false**이고
+명령행에서 명시해야 켜진다. 상수 true를 박으면 검증되지 않은 조건이 기록된 보증으로
+바뀌어 guardian이 없느니만 못해진다.
+
+`qualify_proposal`은 제안 id를 **내용에서 재계산**한다. 실행기가 준 id를 믿으면
+나중에 그 이름으로 무엇을 실행하든 승인하는 셈이다.
+
+### 필드 프로파일 값과 근거
+
+| 항목 | 값 | 근거 |
 |---|---|---|
-| `/hv1_vla/guardian` 발행자 | **존재하지 않음.** 코드에는 구독·검증 측(`node.py`, `core.py`)만 있고 발행하는 노드가 없다. 테스트의 `guardian_node="/fake"`는 실기 사용 금지 | 구현 |
-| 물리 정지 서비스 | **존재하지 않음.** 라이브 ROS 그래프의 서비스 109개 중 stop/estop/halt/emergency 해당 없음 | 구현 + 배선 |
-| `approved`, `review_id`, `qualification_evidence` | 빈 값 | 승인 |
-| `joint_min`, `joint_max`, `max_step`, `max_tracking_error`, `max_velocity`, `max_acceleration`, `start_q`, `start_tolerance` | 전부 `null` | 실측 |
+| `max_step` | **0.041** rad | 정책 스텝의 **p99**. 실질 제한 |
+| `max_velocity` | 1.4 rad/s | `max_step ÷ 30.2ms` + 여유. 스텝이 통과한 걸 속도가 재거부하지 않게 |
+| `max_acceleration` | 50 rad/s² | 한 주기에 `max_velocity` 도달 시 46.4. 백스톱 (정책 p99 35.5) |
+| `joint_min/max` | ±1.5708 | URDF 하드웨어 한계 |
+| `start_q` | `[0.0711, 0.3023, 0.1041, 1.4013, 0.2629, 0.4531, 0.1898]` | 30에피소드 첫 프레임 중앙값 |
+| `start_tolerance` | `[0.06, 0.06, 0.12, 0.08, 0.08, 0.10, 0.07]` | 같은 프레임들의 산포 |
+| `max_tracking_error` | 0.15 rad | **잠정.** 움직여야 측정됨 |
 
-**실측 8개를 시연 데이터에서 유도하지 말 것.** `LiveGate` docstring이 명시한다 —
+**`max_step` p99는 상위 1%에서 fault를 낸다.** 30Hz에서 약 3.3초마다 한 번이다.
+첫 시도에서는 의도된 동작이지만 과제를 끝까지 보기 어려우면 관측 최대 0.065로 올린다.
+
+**실측값을 시연 데이터에서 유도하지 말 것.** `LiveGate` docstring —
 *"Physical limits are required inputs, never inferred from demonstrations."*
-데모 범위는 안전 한계가 아니다.
+`start_q`·`start_tolerance`는 안전 한계가 아니라 자격 있는 시작 자세라 예외다.
 
 ## 미결 결정 — 감독자 몫
 
@@ -208,7 +244,7 @@ hold 0.2~0.3을 선택해도 된다. 반대로 hold 0.5는 최대 오차가 0.6~
    남은 위험은 지연이 아니라, 폐루프에서 모델이 그 감속·정지를 재현하는지다.
    이건 제한 rollout에서만 확인된다. rollout 중 파지 직전 팔 속도를 기록해
    위 시연 분포(직후 0.5초 최대 속도 중앙 0.013 rad/s)와 대조할 것.
-2. 배포 체크포인트 최종 선택 (위 표 1~2순위).
+2. ~~배포 체크포인트 최종 선택~~ — TODAY30-1000 @ hold 0.1 확정.
 3. FT 스냅샷 4개 삭제 여부. 삭제 시 약 20GiB 회수. 게이트 여유가 9GiB뿐이다.
 4. `stash@{0}` 처리 — `rosgraph.png`는 문서 자산으로 보존 결정됨, `df`는 잡파일.
 
@@ -221,10 +257,31 @@ hold 0.2~0.3을 선택해도 된다. 반대로 hold 0.5는 최대 오차가 0.6~
 4. ~~후보 선택~~ — **TODAY30-1000 @ hold 0.1 확정** (독립 2세션 재현)
 5. **손목 카메라 조명 회복** — 작업 영역을 3~4배 밝게. `auto_exposure` 유지한 채
    `/dev/video8`이 30fps 근처가 나오는지 확인 (확정 사실 7)
-6. **실기 활성화 공백 해소** ← 지금 여기. guardian 구현, 물리 정지 서비스 배선,
-   실측 8개, 승인. 위 "실기 활성화 공백" 표 참조
-7. 제한 실기 rollout — 파지 직전·직후 팔 속도를 기록해 확정 사실 10의 시연 분포와
-   대조한다. 폐루프에서 감속·정지가 재현되는지가 닫기 지연 허용의 전제다.
+6. ~~실기 활성화 공백 해소~~ — 완료. guardian 20Hz 발행, 정지 서비스, 승인된
+   프로파일 모두 확인
+7. **제한 실기 rollout** ← 지금 여기. 파지 직전·직후 팔 속도를 기록해 확정 사실 10의
+   시연 분포와 대조한다. 폐루프에서 감속·정지가 재현되는지가 닫기 지연 허용의 전제다.
+   첫 실행의 fault 로그에서 `max_tracking_error`와 실제 필요한 `max_step`을 확정한다.
+
+### 실행 순서
+
+세 터미널이 필요하다. guardian 터미널의 Ctrl-C가 정지 손잡이다.
+
+```
+1  deploy_server  --snapshot snapshots/TODAY30/step_001000 --registry checkpoint_registry.json
+2  python3 -m keti_humanoid_inference.guardian --profile <프로파일> --mqtt-host 192.168.0.142
+                  --workspace-clear --hardware-watchdog [--release-allowed]
+3  ros2 run keti_humanoid_inference vla_client --mode live --port 8000 --grip-min-hold 0.1
+                  --profile <프로파일> --mqtt-host 192.168.0.142 --output <새 디렉터리>
+```
+
+**재빌드는 하지 않는다.** `--symlink-install`이라 `vla_ws/src`에 복사하면 즉시
+반영되며, guardian은 진입점 없이 `python3 -m`으로 실행한다. 2026-09-11 기준
+`build/`·`install/`은 무변경으로 유지되고 있다.
+백업: `hv1-vla-runtime/vla_ws-backup-20260911-135931.tgz`.
+
+`--release-allowed`는 트레이 조건을 정한 뒤에만 붙인다. 없으면 release 시점에
+fault가 난다.
 
 ## 보류 중인 정리 작업
 
