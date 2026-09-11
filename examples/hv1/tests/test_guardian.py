@@ -47,8 +47,12 @@ def test_refuses_a_step_larger_than_max_step():
 
 @pytest.mark.parametrize(
     "broken",
-    [{}, {"proposal_id": "x"}, {"proposal": {"targets": []}, "proposal_id": "x"},
-     {"proposal": {"targets": [{"action": [0.0] * 3}]}, "proposal_id": "x"}],
+    [
+        {},
+        {"proposal_id": "x"},
+        {"proposal": {"targets": []}, "proposal_id": "x"},
+        {"proposal": {"targets": [{"action": [0.0] * 3}]}, "proposal_id": "x"},
+    ],
 )
 def test_refuses_malformed_payloads(broken):
     assert qualify_proposal(broken, -LIMIT, LIMIT, STEP) is None

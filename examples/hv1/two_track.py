@@ -140,9 +140,7 @@ def prepare(old_root, today_root, output):
     today_ids = {episode["id"] for episode in today_meta["episodes"]}
     if old_ids != EXPECTED_OLD or today_ids != EXPECTED_TODAY:
         raise ContractError("source inventory differs from the approved 29+30 plan")
-    episodes = _scan(old_root, old_meta, EXPECTED_OLD, "old") + _scan(
-        today_root, today_meta, EXPECTED_TODAY, "today"
-    )
+    episodes = _scan(old_root, old_meta, EXPECTED_OLD, "old") + _scan(today_root, today_meta, EXPECTED_TODAY, "today")
     value = sealed(
         dict(
             schema=SCHEMA,
@@ -161,7 +159,7 @@ def prepare(old_root, today_root, output):
             diagnostics={
                 "old_fixed6": [e["id"] for e in episodes if e["diagnostic_group"] == "old_fixed6"],
                 "today_fixed6": [e["id"] for e in episodes if e["diagnostic_group"] == "today_fixed6"],
-                "role":"training_overlap_diagnostic_not_common_independent_validation",
+                "role": "training_overlap_diagnostic_not_common_independent_validation",
             },
             initialization="official_pi05_base_independent_per_track",
             normalization="recomputed_per_track_training_data_only",
@@ -318,25 +316,11 @@ def compute_statistics(campaign, track):
 def recipe(name, manifest_sha, steps=TARGET_STEPS):
     if name not in {*TRACKS, *FILTER_FINETUNES, "SMOKE"}:
         raise ContractError("unknown two-track experiment")
-    expected_steps = (
-        50 if name == "SMOKE" else 1000 if name in FILTER_FINETUNES else TARGET_STEPS
-    )
+    expected_steps = 50 if name == "SMOKE" else 1000 if name in FILTER_FINETUNES else TARGET_STEPS
     if steps != expected_steps:
         raise ContractError("recipe step count differs from the approved two-track plan")
-    snapshots = (
-        [50]
-        if name == "SMOKE"
-        else [500, 1000]
-        if name in FILTER_FINETUNES
-        else [250, 500, 1000, TARGET_STEPS]
-    )
-    track = (
-        "TODAY30"
-        if name == "SMOKE"
-        else FILTER_PARENT[name][0]
-        if name in FILTER_PARENT
-        else name
-    )
+    snapshots = [50] if name == "SMOKE" else [500, 1000] if name in FILTER_FINETUNES else [250, 500, 1000, TARGET_STEPS]
+    track = "TODAY30" if name == "SMOKE" else FILTER_PARENT[name][0] if name in FILTER_PARENT else name
     parent = None
     if name in FILTER_PARENT:
         parent_track, parent_step = FILTER_PARENT[name]
@@ -437,11 +421,7 @@ def coverage(schedule, consumed):
         phase_counts=dict(Counter(row["phase"] for row in rows)),
         episode_counts=dict(Counter(row["episode"] for row in rows)),
         event_anchor_counts=dict(
-            Counter(
-                f"{row['phase']}:{row['event_frame']}"
-                for row in rows
-                if row["event_frame"] is not None
-            )
+            Counter(f"{row['phase']}:{row['event_frame']}" for row in rows if row["event_frame"] is not None)
         ),
     )
 

@@ -60,9 +60,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     source_names = sorted({name for event in requests for name in event.get("source_ages_s", {})})
     source_ages = {
         name: _distribution(
-            event["source_ages_s"][name] * 1000
-            for event in requests
-            if name in event.get("source_ages_s", {})
+            event["source_ages_s"][name] * 1000 for event in requests if name in event.get("source_ages_s", {})
         )
         for name in source_names
     }
@@ -94,11 +92,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     monotonic = [float(event["monotonic"]) for event in events if "monotonic" in event]
     start = min(monotonic) if monotonic else 0.0
     sent_targets = sum(bool(event.get("sent")) for event in targets)
-    command_counts = [
-        int(event["robot_commands_sent"])
-        for event in events
-        if "robot_commands_sent" in event
-    ]
+    command_counts = [int(event["robot_commands_sent"]) for event in events if "robot_commands_sent" in event]
 
     first_target = targets[0] if targets else None
     first_action = first_target.get("action", [])[:7] if first_target else []

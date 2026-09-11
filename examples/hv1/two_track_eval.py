@@ -12,14 +12,14 @@ import numpy as np
 
 from . import two_track
 from .artifacts import ContractError
-from .metrics import condition_intents as condition_intents
-from .metrics import cross_modal_matrix as cross_modal_matrix
-from .metrics import transition_metrics as transition_metrics
 from .artifacts import atomic_json
 from .artifacts import file_hash
 from .artifacts import read_json
 from .artifacts import write_new_json
 from .checkpoints import snapshot_identity
+from .metrics import condition_intents as condition_intents
+from .metrics import cross_modal_matrix as cross_modal_matrix
+from .metrics import transition_metrics as transition_metrics
 from .native import CAMERAS
 from .native import PROMPT
 from .two_track_config import configure
@@ -258,7 +258,10 @@ def registered_config(campaign, snapshot, registry_path):
     ):
         raise ContractError("registered snapshot/statistics identity changed")
     evidence_path = (campaign / entry["evaluation"]).resolve()
-    if not evidence_path.is_relative_to(campaign / "evaluations") or file_hash(evidence_path) != entry["evaluation_sha256"]:
+    if (
+        not evidence_path.is_relative_to(campaign / "evaluations")
+        or file_hash(evidence_path) != entry["evaluation_sha256"]
+    ):
         raise ContractError("registered evaluation changed")
     evidence = read_json(evidence_path)
     if evidence.get("snapshot_sha256") != entry["snapshot_sha256"] or evidence.get("gpu_reload_pass") is not True:
@@ -345,17 +348,14 @@ def _correct_hand_shadows(root):
 
 def evaluate_static_intents(campaign, snapshot, shadow_log):
     """Run a fine-tuned policy on saved correct-hand observations without ROS."""
-    campaign, snapshot, shadow_log = map(
-        lambda value: Path(value).resolve(), (campaign, snapshot, shadow_log)
-    )
+    campaign, snapshot, shadow_log = map(lambda value: Path(value).resolve(), (campaign, snapshot, shadow_log))
     manifest = two_track.verify_campaign(campaign)
     if not snapshot.is_relative_to(campaign / "snapshots") or not shadow_log.is_relative_to(campaign / "shadow"):
         raise ContractError("snapshot/static shadow evidence must stay inside the campaign")
     record = snapshot_identity(snapshot)
     recipe = record["recipe"]
-    if (
-        recipe.get("name") not in two_track.FILTER_FINETUNES
-        or recipe != two_track.recipe(recipe["name"], manifest["sha256"], recipe["steps"])
+    if recipe.get("name") not in two_track.FILTER_FINETUNES or recipe != two_track.recipe(
+        recipe["name"], manifest["sha256"], recipe["steps"]
     ):
         raise ContractError("static replay requires a filter fine-tune snapshot")
     events = _read_events(shadow_log)
@@ -370,7 +370,9 @@ def evaluate_static_intents(campaign, snapshot, shadow_log):
     predictions = {}
     config, _ = configure(campaign, recipe)
     from filelock import FileLock
+
     from openpi.policies.policy_config import create_trained_policy
+
     from .deploy_server import prepare_images
 
     sequences = sorted({int(event["prediction"]["sequence"]) for event in targets})
@@ -394,9 +396,7 @@ def evaluate_static_intents(campaign, snapshot, shadow_log):
             images = prepare_images(payload)
             noise = np.random.default_rng(900_000 + sequence).normal(size=(15, 32)).astype(np.float32)
             actions = np.asarray(
-                policy.infer(
-                    {"state": state, "images": images, "prompt": PROMPT}, noise=noise
-                )["actions"]
+                policy.infer({"state": state, "images": images, "prompt": PROMPT}, noise=noise)["actions"]
             )
             if actions.shape != (15, 8) or not np.isfinite(actions).all():
                 raise ContractError("invalid static replay prediction")
@@ -510,11 +510,7 @@ def sweep_filter(campaign, shadow_root, output, *, hold_times=(0.1, 0.2, 0.3, 0.
                         and max_abs_close_error <= 0.3,
                     }
                 )
-    common = [
-        hold
-        for hold in hold_times
-        if all(row["pass"] for row in rows if row["min_hold_s"] == hold)
-    ]
+    common = [hold for hold in hold_times if all(row["pass"] for row in rows if row["min_hold_s"] == hold)]
     result = {
         "schema": "hv1_grasp_filter_sweep_v1",
         "manifest_sha256": manifest["sha256"],
@@ -540,15 +536,8 @@ def sweep_filter_finetunes(campaign, output, *, hold_times=(0.1, 0.2, 0.3, 0.5))
     for hold in hold_times:
         for experiment in two_track.FILTER_FINETUNES:
             for step in (500, 1000):
-                teacher = read_json(
-                    campaign
-                    / "evaluations"
-                    / "intent_series"
-                    / f"{experiment}_{step:06d}.json"
-                )
-                static = read_json(
-                    campaign / "evaluations" / "static_intent_series" / f"{experiment}_{step:06d}.json"
-                )
+                teacher = read_json(campaign / "evaluations" / "intent_series" / f"{experiment}_{step:06d}.json")
+                static = read_json(campaign / "evaluations" / "static_intent_series" / f"{experiment}_{step:06d}.json")
                 if (
                     teacher.get("schema") != "hv1_grasp_intent_series_v1"
                     or static.get("schema") != "hv1_static_grasp_intent_series_v1"

@@ -24,8 +24,8 @@ from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core impor
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import Rejected
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import make_request
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import named_positions
-from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import validate_metadata
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import validate_hand_envelope
+from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import validate_metadata
 
 
 def metadata():

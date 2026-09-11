@@ -63,13 +63,7 @@ def make_loader(config, schedule, sharding, consumed=0):
 def train(campaign, name, deadline, *, resume=False):
     campaign = Path(campaign).resolve()
     manifest = two_track.verify_campaign(campaign, raw=True)
-    steps = (
-        50
-        if name == "SMOKE"
-        else 1000
-        if name in two_track.FILTER_FINETUNES
-        else two_track.TARGET_STEPS
-    )
+    steps = 50 if name == "SMOKE" else 1000 if name in two_track.FILTER_FINETUNES else two_track.TARGET_STEPS
     recipe = two_track.recipe(name, manifest["sha256"], steps)
     schedule = two_track.checked(campaign / f"sampler_{name}.json")
     expected = two_track.sample_schedule(manifest, name, recipe["steps"] * recipe["batch_size"])
@@ -252,7 +246,9 @@ def train(campaign, name, deadline, *, resume=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", required=True)
-    parser.add_argument("--experiment", choices=["SMOKE", *two_track.TRACKS, *two_track.FILTER_FINETUNES], required=True)
+    parser.add_argument(
+        "--experiment", choices=["SMOKE", *two_track.TRACKS, *two_track.FILTER_FINETUNES], required=True
+    )
     parser.add_argument("--deadline", required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--allow-gpu-run", action="store_true")

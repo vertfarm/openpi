@@ -31,7 +31,9 @@ def local_dataset(data, model, root):
     dataset = LeRobotDataset(
         data.repo_id,
         root=root,
-        delta_timestamps={key: [t / metadata.fps for t in range(model.action_horizon)] for key in data.action_sequence_keys},
+        delta_timestamps={
+            key: [t / metadata.fps for t in range(model.action_horizon)] for key in data.action_sequence_keys
+        },
     )
     if data.prompt_from_task:
         dataset = data_loader.TransformedDataset(dataset, [transforms.PromptFromLeRobotTask(metadata.tasks)])

@@ -129,7 +129,9 @@ def read_numeric(path, *, allow_multiple_cycles=False):
             release_frame=release_frames[-1],
             grasp_frames=close_frames,
             release_frames=release_frames,
-            gripper_events=[dict(frame=int(frame), intent=int(intent)) for frame, intent in zip(changes, intents, strict=True)],
+            gripper_events=[
+                dict(frame=int(frame), intent=int(intent)) for frame, intent in zip(changes, intents, strict=True)
+            ],
             stale_rows=0,
             row_timestamp_seconds=ts.tolist(),
             source_stamp_ns=f["stamp_ns"][:].tolist(),

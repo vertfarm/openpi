@@ -147,7 +147,11 @@ def execute(campaign, deadline, reviewer):
     for track in two_track.TRACKS:
         result_path = campaign / "runs" / track / "result.json"
         recipe = two_track.recipe(track, manifest["sha256"])
-        registry = two_track.checked(campaign / "checkpoint_registry.json") if (campaign / "checkpoint_registry.json").is_file() else {"entries": {}}
+        registry = (
+            two_track.checked(campaign / "checkpoint_registry.json")
+            if (campaign / "checkpoint_registry.json").is_file()
+            else {"entries": {}}
+        )
         expected_keys = {
             str((campaign / "snapshots" / track / f"step_{step:06d}").relative_to(campaign))
             for step in recipe["snapshots"]
