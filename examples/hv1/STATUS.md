@@ -1,6 +1,6 @@
 # HV1 현재 상태
 
-최종 갱신 2026-09-11 · 감사 세션(현장 리눅스) · 규약은 [AGENTS.md](../../AGENTS.md)
+최종 갱신 2026-09-11 · V2/V3 원격 GPU 절제실험 완료 · 규약은 [AGENTS.md](../../AGENTS.md)
 
 이 파일은 **지금 사실인 것**만 담는다. 매 세션 끝에 덮어쓴다.
 
@@ -28,6 +28,11 @@
 파지 거리 중앙 0.699 rad). 파지 자세에 없으니 intent가 오르지 않고 그리퍼도
 안 닫힌다. **intent 헤드 자체는 정상이다** — 파지 자세를 주면 1.0을 낸다.
 
+V2/V3까지 실행했다. V2(state noise)는 장면 교체에 대한 반응을 일부 만들었지만
+진단그룹에 따라 gap 부호가 바뀌고 방향 코사인 감소도 일관되지 않았다. V3(close 45% +
+state noise)는 다시 gap이 거의 0이고 코사인이 1에 가까웠다. **임계값·자동 판정은
+적용하지 않았고 두 실험 모두 배포 registry에 등록하지 않았다.**
+
 ## 이전 한 줄 요약
 
 그리퍼는 학습에 성공했고, intent 필터로 정지 오검출이 0이 됐다.
@@ -43,14 +48,14 @@
 
 | 항목 | 값 |
 |---|---|
-| canonical HEAD | 현장 로컬. **원격 `670d285`보다 8커밋 앞섬 — 푸시 필요** |
+| canonical HEAD | 현장 `48bfdf5`까지 Windows가 fast-forward로 흡수·원격 푸시 완료. 이 결과 갱신 커밋도 같은 canonical 브랜치에 반영 |
 | 회귀 테스트 | 177개 통과 (`.venv/bin/python -m pytest examples/hv1/tests`, 15초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
 | repo ↔ `vla_ws` 사본 | `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
-| 디스크 여유 | **159GiB** (게이트 15GiB). 138.6GiB 회수 (overnight 88.9 + FT 19.6 + V1 옵티마이저 30.1) |
+| 디스크 여유 | **150GiB** (게이트 15GiB). V2/V3 추론 스냅샷 2개 생성 후 실측; 두 optimizer restart는 자동 정리 완료 |
 | 실행 코드 신원 | `pkg prefix` → `vla_ws/install`, import → `vla_ws/build`, `core.py` 해시가 서버 `adapter_core_sha256`와 일치 (2026-09-11 확인) |
 
 ### 세션 종료 시점의 실행 상태 (2026-09-11 저녁)
@@ -62,6 +67,7 @@
 | `deploy_server` | 없음 — 교차지표 실행을 위해 GPU lock 해제하려고 정지 |
 | `guardian` | 없음 |
 | `vla_client` | 없음 |
+| V2/V3 학습·평가 | 완료 후 프로세스 없음. GPU 393MiB, `robot_commands_sent=0` |
 | 컨테이너 ROS 노드 | `rqt_gui_cpp_node` 하나뿐. 제어 스택 없음 = **팔 토크 없음** |
 | 컨테이너 | `keti_humanoid_ros2_jazzy` Up, 유휴 |
 
@@ -75,9 +81,12 @@ guardian을 반드시 새로 띄운다 — `workspace_clear`는 사람이 검수
 
 ### 디스크 — 2026-09-11에 138.6 GiB 회수
 
-여유 **159 GiB**. 게이트는 50 → **15 GiB**로 낮췄다(감독자 승인).
+여유 **150 GiB**. 게이트는 50 → **15 GiB**로 낮췄다(감독자 승인).
 전부 `_safe_generated_cleanup`으로 지웠으므로 각 캠페인의 `cleanup/`에 무엇을·왜·
 어떤 증거로 지웠는지 해시와 함께 남아 있다.
+
+V2/V3 실행으로 `step_002000` 추론 스냅샷 2개가 추가됐다. `pipeline_run` 완료 후
+두 실험의 `restarts/` optimizer 상태는 자동 정리됐고, 원본·기존 스냅샷은 건드리지 않았다.
 
 | 지운 것 | 크기 | 판단 근거 |
 |---|---|---|
@@ -348,7 +357,8 @@ registry의 `schema`가 `hv1_two_track_v1`이 아니면 스냅샷을 열기 전�
 2. ~~배포 체크포인트 최종 선택~~ — TODAY30-1000 @ hold 0.1 확정.
 3. FT 스냅샷 4개 삭제 여부. 삭제 시 약 20GiB 회수. 게이트 여유가 9GiB뿐이다.
 4. `stash@{0}` 처리 — `rosgraph.png`는 문서 자산으로 보존 결정됨, `df`는 잡파일.
-5. **state 지름길 차단 실험 승인** — 아래 설계안. 학습 설정 변경이라 검토가 필요하다.
+5. **state 지름길의 다음 대응** — V2/V3 결과는 아래 표와 같다. 추가 sigma sweep을
+   자동 실행하지 않았으며, 수집 재설계와 함께 감독자가 다음 실험을 선택해야 한다.
 
 ### V1 결과 — 손실 가중치만으로는 안 된다 (2026-09-11, 실행 완료)
 
@@ -378,16 +388,35 @@ gap은 그대로 0이고 코사인은 오히려 0.9974 → 0.9985로 미세하�
 **이 실험의 값어치**: 20분 만에 레버 하나를 확실히 배제했다. 교차지표가 붙기
 전이었다면 teacher-forced 점수만 보고 "비슷하네"로 끝났을 것이다.
 
-### V2·V3 — 구현·검증 완료, 실행만 남음 (2026-09-11)
+### V2·V3 결과 — 일부 반응은 생겼지만 일관된 시각 사용은 아님 (2026-09-11, 실행 완료)
 
-`pipeline.ABLATIONS`에 둘 다 들어 있다. GPU 실행만 하면 된다.
+`pipeline_run --ablations`가 V2 → 평가 → V3 → 평가를 순차 완료했다. 총 2,794초
+(46분 34초), 두 실험 모두 2,000 updates이며 BF16 스냅샷과 두 진단그룹 결과가 있다.
+학습·평가 종료 후 GPU 프로세스는 없고 optimizer restart도 정리됐다.
 
-| 이름 | 변경 |
-|---|---|
-| `TODAY30_NOISE10` | **V2** — `state_noise_sigma=1.0` |
-| `TODAY30_CLOSE45_NOISE10` | **V3** — V1 + V2 |
+| 실험 | 그룹 | 대각 intent 중앙 | gap | 방향 코사인 |
+|---|---|---:|---:|---:|
+| TODAY30-2000 기준선 | today_fixed6 | 1.0147 | -0.00024 | 0.9974 |
+| V1 `TODAY30_CLOSE45` | today_fixed6 | 0.99784 | +0.00012 | 0.99852 |
+| V1 `TODAY30_CLOSE45` | old_fixed6 | 0.99955 | +0.00037 | 0.99901 |
+| **V2 `TODAY30_NOISE10`** | **today_fixed6** | **0.93656** | **-0.02256** | **0.99152** |
+| **V2 `TODAY30_NOISE10`** | **old_fixed6** | **0.93483** | **+0.00987** | **0.99763** |
+| **V3 `TODAY30_CLOSE45_NOISE10`** | **today_fixed6** | **1.00800** | **+0.00196** | **0.99563** |
+| **V3 `TODAY30_CLOSE45_NOISE10`** | **old_fixed6** | **1.02471** | **+0.00099** | **0.99920** |
 
-**실행은 명령 하나다.** `pipeline_run --ablations`가 큐 전체를 순차로 돌린다 —
+대각 intent는 V2도 약 0.935로 0에 가깝지 않아 앵커가 빗나간 결과는 아니다.
+V2는 기준선보다 gap 절댓값이 커지고 today_fixed6의 방향 코사인이 0.9974 → 0.9915로
+내려갔지만, old_fixed6에서는 gap 부호가 반대이고 코사인이 0.9976으로 그대로다.
+**장면 민감도가 일부 생겼다는 신호는 있으나 그룹을 넘어 일관된 개선이라고 할 수 없다.**
+V3는 두 그룹 모두 gap이 0.002 이하이고 코사인이 0.9956~0.9992여서 V1과 V2를
+결합해도 state 지름길이 유지됐다.
+
+결과 파일: `two-track-20260910-r3/ablation_result.json`
+(`sha256 cf6556ae5b40c36dc46d090fd5a38f415c85344829f4bd847621a108a909c80e`).
+`complete=true`, `robot_commands_sent=0`, `registered_for_deployment=false`,
+`threshold_applied=false`다.
+
+**재실행은 명령 하나다.** `pipeline_run --ablations`가 큐 전체를 순차로 돌린다 —
 스케줄 생성 → 학습 → teacher-forced 평가 → 교차지표 2그룹 → 옵티마이저 상태 정리.
 GPU lock이 1개라 자연히 직렬이고, `ablation_result.json`에 비교표를 쓴다.
 
@@ -442,7 +471,7 @@ resume이 다른 데이터셋을 학습하지 않는다.
 붙는다. 트랙 레시피는 필드가 늘지 않는다 — r3의 배포 스냅샷 4개(TODAY30/ALL59 ×
 1000/2000) 전부 저장된 recipe와 `pipeline.recipe()` 결과가 **여전히 일치**함을 확인했다.
 
-### 설계 근거 (V1 완료, V2·V3 준비됨)
+### 설계 근거 (V1~V3 실행 완료)
 
 **왜 state를 쓰는가.** 액션이 state에 대한 delta(`delta_state_indices=[0..6,-1]`)이므로
 모델은 좌표 기준으로 state가 필요하지 않다. **에피소드의 어디쯤인지**를 알기 위해서만
@@ -473,13 +502,12 @@ resume이 다른 데이터셋을 학습하지 않는다.
 | 실험 | 변경 | 성격 |
 |---|---|---|
 | ~~V1~~ | `phase_fractions` close 0.15 → 0.45 | **완료 — 개선 없음** (위 결과) |
-| V2 | state 노이즈 σ=1.0 (정규화 단위) | `make_loader` 격리 구현 |
-| V3 | V1 + V2 | 둘의 상호작용 확인 |
+| ~~V2~~ | state 노이즈 σ=1.0 (정규화 단위) | **완료 — 그룹별 반응이 혼재** |
+| ~~V3~~ | V1 + V2 | **완료 — 일관된 개선 없음** |
 
-**비용.** 2000스텝 = **17분** (실측 0.40 s/update), 평가 수 분. 시간은 문제가 아니다.
-**디스크가 제약이다** — 스냅샷 1개 4.9G, 여유 56G에 게이트 50G. 절제 실험은
-`snapshots=[2000]` 하나만 저장해 3개 합계 14.7G로 맞춘다. 4개 스텝을 다 저장하면
-1개 실험에 19.6G라 들어가지 않는다.
+**비용.** 학습 안정 구간은 약 0.40 s/update였고 V1 재평가를 포함한 전체 큐는
+2,794초였다. 스냅샷은 실험당 `step_002000` 하나만 남겼으며 실행 후 디스크 여유는
+150GiB다. optimizer restart는 자동 정리됐다.
 
 **측정.** 변형마다 (ㄱ) `evaluate-cross-modal` gap·코사인, (ㄴ) 기존 teacher-forced
 지표가 나빠지지 않았는지, (ㄷ) 예측 궤적 길이 대 실제 파지 거리(기준선 1.060 대 0.699,
@@ -697,6 +725,7 @@ fault가 난다.
 
 | 파일 | SHA-256 |
 |---|---|
+| `ablation_result.json` | `cf6556ae5b40c36dc46d090fd5a38f415c85344829f4bd847621a108a909c80e` |
 | `evaluations/overnight_grasp_intent_report_v1.json` | `8a6ab05ea140f33093e4e5bdb23e619e4f51d3fb82de540387956b6aee25d65c` |
 | `evaluations/grasp_filter_sweep_v1.json` | `981b9b474a0b037024abf96126e2f2878362390a2dc903fe67b4820d2b8fd908` |
 | `evaluations/grasp_filter_finetune_sweep_v1.json` | `023b7c7a7a617f8592a161af8074ebe0fbebe767e8cda9f8837b4c325f397fbb` |
