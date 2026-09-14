@@ -1,10 +1,10 @@
 # HV1 현재 상태
 
-최종 갱신 2026-09-14 · V2/V3 실패 확정(노이즈 바닥 측정) · 규약은 [AGENTS.md](../../AGENTS.md)
+최종 갱신 2026-09-14 · 규약은 [AGENTS.md](../../AGENTS.md)
 
 이 파일은 **지금 사실인 것**만 담는다. 매 세션 끝에 덮어쓴다.
 
-## 한 줄 요약 — 2026-09-11 저녁
+## 한 줄 요약
 
 **첫 실기 rollout이 ARM 후 45.0초를 제어 fault 없이 돌고 pilot 상한에서 멈췄다.**
 `events.jsonl` 실측: target 1,347개 @ 30.0Hz, 추론 451회 @ 10.02Hz, 기록된 fault는
@@ -28,88 +28,54 @@
 파지 거리 중앙 0.699 rad). 파지 자세에 없으니 intent가 오르지 않고 그리퍼도
 안 닫힌다. **intent 헤드 자체는 정상이다** — 파지 자세를 주면 1.0을 낸다.
 
-V2/V3까지 실행했고 **둘 다 실패했다.** 2026-09-14에 지표의 노이즈 바닥을 재서
-확정했다 — **V2의 gap은 자기 자신의 샘플링 흔들림 안에 있다.** 아래 「V2·V3 결과」 참조.
-**임계값·자동 판정은 적용하지 않았고 두 실험 모두 배포 registry에 등록하지 않았다.**
+코드로 고치려는 시도 **셋 다 실패했다** — V1(손실 가중), V2(state 노이즈),
+V3(둘의 결합). V2는 그룹별로 gap 부호가 갈려 한때 "일부 반응"으로 읽혔지만,
+지표의 노이즈 바닥을 재보니 **자기 자신의 샘플링 흔들림 안**이었고 정책만
+25배 불안정해졌다. 측정 방법과 전체 수치는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
 
-이로써 코드 쪽 레버 두 개(V1 손실 가중, V2 state 노이즈)가 모두 소진됐다.
-남은 길은 **수집 재설계**다 — 처음부터 근본 해법으로 지목돼 있던 것이다.
-
-## 이전 한 줄 요약
-
-그리퍼는 학습에 성공했고, intent 필터로 정지 오검출이 0이 됐다.
-필터가 만드는 닫기 지연도 시연 데이터 기준으로는 무해한 수준으로 확인됐다.
-후보 2개는 실제 로봇 관측으로 라이브 재검증까지 마쳤다.
-**그리퍼·모델 쪽 미해결 이슈는 없다.**
-
-**실기 활성화 공백은 2026-09-11에 채워졌다.** guardian 노드, 토크를 유지하는
-소프트웨어 정지, 승인된 필드 프로파일이 모두 있고 실기에서 동작을 확인했다.
-남은 것은 첫 감독하 rollout 실행과, 그 로그로만 확정할 수 있는 값 두 개다.
+**코드 레버는 소진됐다. 남은 길은 수집 재설계다** — 처음부터 근본 해법으로
+지목돼 있던 것이다. 목표치: `|d15|` 대 거리 상관 `|r| > 0.6`,
+초기 접근 방향 코사인 중앙 **≤ 0.3** (현재 0.89~0.99).
 
 ## 코드 상태
 
 | 항목 | 값 |
 |---|---|
-| canonical HEAD | 현장 `48bfdf5`까지 Windows가 fast-forward로 흡수·원격 푸시 완료. 이 결과 갱신 커밋도 같은 canonical 브랜치에 반영 |
-| 회귀 테스트 | 181개 통과 (`.venv/bin/python -m pytest examples/hv1/tests`, 15초) |
+| canonical 브랜치 | `codex/hv1-vla-workflow-20260909` (remote `origin`) |
+| 회귀 테스트 | 182개 (`.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 15초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
 | repo ↔ `vla_ws` 사본 | `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
-| 디스크 여유 | **150GiB** (게이트 15GiB). V2/V3 추론 스냅샷 2개 생성 후 실측; 두 optimizer restart는 자동 정리 완료 |
-| 실행 코드 신원 | `pkg prefix` → `vla_ws/install`, import → `vla_ws/build`, `core.py` 해시가 서버 `adapter_core_sha256`와 일치 (2026-09-11 확인) |
 
-### 세션 종료 시점의 실행 상태 (2026-09-11 저녁)
+숫자는 낡는다. **지금 값은 아래로 직접 확인한다.**
 
-**로봇 관련 프로세스는 전부 내려가 있다.** 실측으로 확인했다.
+```bash
+git log --oneline -1 && git status --short          # HEAD, 미커밋
+.venv/bin/python -B -m pytest examples/hv1/tests -q  # 테스트
+df -h ~/workspace | tail -1                          # 디스크 (게이트 15GiB)
+ps -eo etime,cmd | grep -E "[d]eploy_server|[g]uardian|[v]la_client"   # 떠 있는 것
+curl -s http://127.0.0.1:8000/health                 # 서버가 있다면 해시 3종
+sha256sum examples/hv1/ros/keti_humanoid_inference/keti_humanoid_inference/core.py
+```
 
-| 대상 | 상태 |
-|---|---|
-| `deploy_server` | 없음 — 교차지표 실행을 위해 GPU lock 해제하려고 정지 |
-| `guardian` | 없음 |
-| `vla_client` | 없음 |
-| V2/V3 학습·평가 | 완료 후 프로세스 없음. GPU 393MiB, `robot_commands_sent=0` |
-| 컨테이너 ROS 노드 | `rqt_gui_cpp_node` 하나뿐. 제어 스택 없음 = **팔 토크 없음** |
-| 컨테이너 | `keti_humanoid_ros2_jazzy` Up, 유휴 |
+`core.py` 해시는 **repo · `vla_ws` 실행 사본 · 서버 `/health`의 `adapter_core_sha256`
+세 곳이 일치**해야 한다. 어긋나면 재빌드 없이 실기를 시작하지 않는다.
 
-정리 커밋들은 `core.py`를 건드리지 않았고, 정지 직전 서버 `/health`의
-`adapter_core_sha256` = `59775ee4…` 가 repo·`vla_ws` 사본과 **세 곳 모두 일치**함을
-확인했다. 이름 변경(C4)은 배포를 깨지 않았다. **재빌드·재시작 불필요.**
+### 디스크 정책
 
-**실기를 다시 할 때의 순서**: `deploy_server` 기동 → **guardian 재시작** → `vla_client`.
-guardian을 반드시 새로 띄운다 — `workspace_clear`는 사람이 검수한 증거이고 이전 세션의
-것은 낡았다.
+게이트는 `artifacts.py`의 `MIN_FREE` = **15 GiB**(2026-09-11 감독자 승인으로 50에서 낮춤).
+학습 1회가 그 위에 40 GiB를 예약하므로 **여유 55 GiB 미만이면 학습이 거부된다.**
 
-### 디스크 — 2026-09-11에 138.6 GiB 회수
+정리는 반드시 `pipeline_run._safe_generated_cleanup`으로 한다 — 각 캠페인 `cleanup/`에
+무엇을·왜·어떤 증거로 지웠는지 해시와 함께 남는다. 2026-09-11에 이 방식으로
+138.6 GiB를 회수했다(은퇴 캠페인 가중치 88.9 + FT 스냅샷 19.6 + optimizer 상태 30.1).
 
-여유 **150 GiB**. 게이트는 50 → **15 GiB**로 낮췄다(감독자 승인).
-전부 `_safe_generated_cleanup`으로 지웠으므로 각 캠페인의 `cleanup/`에 무엇을·왜·
-어떤 증거로 지웠는지 해시와 함께 남아 있다.
-
-V2/V3 실행으로 `step_002000` 추론 스냅샷 2개가 추가됐다. `pipeline_run` 완료 후
-두 실험의 `restarts/` optimizer 상태는 자동 정리됐고, 원본·기존 스냅샷은 건드리지 않았다.
-
-| 지운 것 | 크기 | 판단 근거 |
-|---|---|---|
-| `overnight-20260909/snapshots` | 83.4G | A~F. registry가 없어 **현재 배포 경로가 로드 자체를 못 한다**. 모듈도 삭제됨 |
-| `overnight-20260909/export_*` | 5.5G | 같은 캠페인의 LeRobot export |
-| r3 `snapshots/*_FT` | 19.6G | registry 미등록 = 배포 불가. 스윕 결과는 JSON으로 보존됨 |
-| r3 `restarts/.../TODAY30_CLOSE45` | 30.1G | V1 옵티마이저 상태. run 완료·스냅샷 저장 후라 재생성 가능 |
-
-**남긴 것**: `overnight-20260909` 기록 22M(평가·recipe·scan 썸네일·`CHECKPOINTS.md`).
-무엇을 했는지의 증거는 싸고 가치 있다.
-
-**핵심 — 원본은 건드리지 않았다.** 대체 불가능한 자산은 원본 녹화뿐이고 그건
-`keti_humanoid_ros2/datasets/`에 **302 MB**로 온전하다 (260909 163M + 260910 139M).
-overnight이 학습한 29에피소드는 지금 ALL59의 old 29개와 **같은 원본**이다.
-88.9G는 데이터가 아니라 거기서 뽑아낸 가중치였고, 같은 원본으로 언제든 다시 만들 수 있다.
-
-**남은 큰 항목**: `cache/openpi` 11.6G + `cache/huggingface` 11.4G. **지우지 말 것** —
-모든 학습 실행이 여기서 pi05_base를 읽는다. 지우면 11.6G를 다시 받아야 한다.
-
-> `du`로 회수량을 재지 말 것. `cache/uv`는 `du` 7.9G였는데 `df`는 0.3G만 늘었다 —
-> uv가 venv로 하드링크를 건다. `df`나 `st_nlink`로 확인한다.
+- **지우지 말 것**: `cache/openpi`·`cache/huggingface` — 모든 학습이 여기서 pi05_base를 읽는다.
+- **회수량을 `du`로 재지 말 것.** `cache/uv`는 `du` 7.9G인데 `df`는 0.3G만 늘었다 —
+  uv가 venv로 하드링크를 건다. `df`나 `st_nlink`로 확인한다.
+- 원본 녹화(`keti_humanoid_ros2/datasets/`, 302 MB)는 **유일하게 대체 불가능한 자산**이다.
 
 ## 확정된 사실 — 재검증하지 말 것
 
@@ -177,7 +143,7 @@ overnight이 학습한 29에피소드는 지금 ALL59의 old 29개와 **같은 �
    224×224**로 하라. `metadata.json`의 `"rotate"`도 카메라 노드 설정이 아니라
    레코더 자신의 추가 회전값(기본 0)이다.
 
-   점검 도구: `~/workspace/hv1-check-camera-input.py` — 학습/라이브/겹침을
+   점검 도구: `examples/hv1/tools/check_camera_input.py` — 학습/라이브/겹침을
    224×224로 나란히 내고 빨간 매트 경계를 수치로 비교한다.
 
 9. **정책의 접근 방향은 시연과 일치한다.** shadow에서 로봇은 안 움직이지만 정책이
@@ -362,201 +328,6 @@ registry의 `schema`가 `hv1_two_track_v1`이 아니면 스냅샷을 열기 전�
 5. **state 지름길의 다음 대응** — V2/V3 결과는 아래 표와 같다. 추가 sigma sweep을
    자동 실행하지 않았으며, 수집 재설계와 함께 감독자가 다음 실험을 선택해야 한다.
 
-### V1 결과 — 손실 가중치만으로는 안 된다 (2026-09-11, 실행 완료)
-
-`TODAY30_CLOSE45` = TODAY30에서 `phase_fractions`만 70/15/15 → 40/45/15.
-2,000스텝 1,103초, BF16 CPU 왕복 통과, 파지 표본 1,800/4,000(45%) 적용 확인.
-
-| 스냅샷 | 그룹 | gap | 방향 코사인 | 대각 중앙 |
-|---|---|---|---|---|
-| TODAY30-2000 (기준선) | today_fixed6 | −0.00024 | 0.9974 | 1.0147 |
-| **TODAY30_CLOSE45-2000** | today_fixed6 | **+0.00012** | **0.9985** | 0.9978 |
-| TODAY30_CLOSE45-2000 | old_fixed6 | +0.00037 | 0.9990 | — |
-
-**파지 구간 표본을 3배로 늘려도 정책은 여전히 카메라를 쓰지 않는다.**
-gap은 그대로 0이고 코사인은 오히려 0.9974 → 0.9985로 미세하게 올랐다(의미 없는 차이).
-대각 intent가 1.0147 → 0.9978로 참값 1.0에 가까워진 것이 유일한 변화인데,
-회귀 보정이 약간 나아진 것일 뿐 시각 사용과는 무관하다.
-
-**해석.** 멈춤 판단의 손실 비중을 키우는 것만으로는 지름길이 사라지지 않는다.
-팔 자세가 위상 시계로 남아 있는 한, close 구간에서도 "이 자세면 닫을 때"가
-여전히 성립하기 때문으로 보인다. 남은 레버는 시계 자체를 망가뜨리는 V2와,
-시계를 불충분하게 만드는 수집 재설계(1번)다.
-
-**측정하지 않은 것**: teacher-forced 지표 회귀와 예측 궤적 길이. 주 질문이
-결정적으로 답해져서 배포 후보가 아니게 됐으므로 생략했다. 필요하면
-`pipeline_eval evaluate --snapshot .../TODAY30_CLOSE45/step_002000`로 잰다.
-
-**이 실험의 값어치**: 20분 만에 레버 하나를 확실히 배제했다. 교차지표가 붙기
-전이었다면 teacher-forced 점수만 보고 "비슷하네"로 끝났을 것이다.
-
-### V2·V3 결과 — 둘 다 실패 (2026-09-11 실행, 2026-09-14 노이즈 바닥으로 확정)
-
-`pipeline_run --ablations`가 V2 → 평가 → V3 → 평가를 순차 완료했다. 총 2,794초
-(46분 34초), 두 실험 모두 2,000 updates이며 BF16 스냅샷과 두 진단그룹 결과가 있다.
-학습·평가 종료 후 GPU 프로세스는 없고 optimizer restart도 정리됐다.
-
-| 실험 | 그룹 | 대각 intent 중앙 | gap | 방향 코사인 |
-|---|---|---:|---:|---:|
-| TODAY30-2000 기준선 | today_fixed6 | 1.0147 | -0.00024 | 0.9974 |
-| V1 `TODAY30_CLOSE45` | today_fixed6 | 0.99784 | +0.00012 | 0.99852 |
-| V1 `TODAY30_CLOSE45` | old_fixed6 | 0.99955 | +0.00037 | 0.99901 |
-| **V2 `TODAY30_NOISE10`** | **today_fixed6** | **0.93656** | **-0.02256** | **0.99152** |
-| **V2 `TODAY30_NOISE10`** | **old_fixed6** | **0.93483** | **+0.00987** | **0.99763** |
-| **V3 `TODAY30_CLOSE45_NOISE10`** | **today_fixed6** | **1.00800** | **+0.00196** | **0.99563** |
-| **V3 `TODAY30_CLOSE45_NOISE10`** | **old_fixed6** | **1.02471** | **+0.00099** | **0.99920** |
-
-대각 intent는 V2도 약 0.935라 앵커가 빗나간 결과는 아니다. V3는 두 그룹 모두
-gap 0.002 이하, 코사인 0.9956~0.9992로 V1·V2를 합쳐도 지름길이 유지됐다.
-
-#### 노이즈 바닥 측정 — V2는 실패다 (2026-09-14)
-
-V2의 gap이 그룹마다 **부호가 반대**(today −0.0226, old +0.0099)여서 "그룹이
-엇갈리는 실제 효과"인지 "지표가 혼자 흔들린 것"인지 판단할 수 없었다.
-같은 체크포인트·같은 입력에 **샘플링 draw만 8번 바꿔** 재서 확정했다
-(`pipeline_eval cross-modal-floor`).
-
-| 체크포인트 | 그룹 | 8 draw gap 범위 | std | 보고된 gap | 판정 |
-|---|---|---|---:|---:|---|
-| TODAY30-2000 | today | [−0.00085, +0.00162] | 0.00088 | −0.00024 | 바닥 안 |
-| **V2** | **today** | **[−0.05583, +0.01964]** | **0.02210** | **−0.02256** | **바닥 안** |
-| V2 | old | [−0.00841, +0.00824] | 0.00469 | +0.00987 | 겨우 2σ |
-
-**V2의 −0.0226은 자기 자신의 흔들림 폭 안에 있다.** 장면을 읽어서 나온 값이 아니다.
-그룹 간 부호 불일치도 독립적인 두 draw에서 자연히 나오는 모습이다.
-
-그리고 **V2는 정책을 더 불안정하게 만들었다.** 노이즈 바닥이 기준선의 **25배**
-(std 0.00088 → 0.02210)다. 손상된 state로 학습시킨 직접적 결과이고, 배포 관점에서는
-같은 입력에 대한 출력 재현성이 나빠졌다는 뜻이다 — 확정 사실 2의 `extra_close`
-계열 사고가 늘어나는 방향이다. **얻은 것 없이 잃기만 했다.**
-
-부수 확인: 기준선의 바닥이 std 0.00088로 **매우 좁다.** 지표 자체는 충분히
-예민하다 — 신호가 없는 것이지 도구가 둔한 게 아니다.
-
-결과 파일: `evaluations/cross_modal/floor_*.json`
-
-결과 파일: `two-track-20260910-r3/ablation_result.json`
-(`sha256 cf6556ae5b40c36dc46d090fd5a38f415c85344829f4bd847621a108a909c80e`).
-`complete=true`, `robot_commands_sent=0`, `registered_for_deployment=false`,
-`threshold_applied=false`다.
-
-**재실행은 명령 하나다.** `pipeline_run --ablations`가 큐 전체를 순차로 돌린다 —
-스케줄 생성 → 학습 → teacher-forced 평가 → 교차지표 2그룹 → 옵티마이저 상태 정리.
-GPU lock이 1개라 자연히 직렬이고, `ablation_result.json`에 비교표를 쓴다.
-
-```
-python -B -m examples.hv1.pipeline_run --campaign "$CAMPAIGN" \
-  --ablations --deadline <미래 ISO8601+offset> --allow-gpu-run
-```
-
-**재개 가능하다.** 각 실험은 result·teacher-forced 평가·교차지표 2개·restart 정리가
-모두 있으면 건너뛴다. 중단됐으면 그냥 다시 실행하면 빠진 단계부터 이어간다.
-V1은 이미 학습이 끝나 있으므로 teacher-forced 평가만 채우고 넘어간다.
-
-**절제 실험은 registry에 등록하지 않는다** — 배포 후보가 아니므로 `register` 단계가
-의도적으로 없다.
-
-**원격(Windows)에서 띄우기.** SSH 터널이 이미 열려 있다(git fetch가 그 위로 돈다).
-GPU·데이터가 현장에만 있으므로 Windows는 **띄우고 읽기만** 한다.
-
-```
-ssh -p 2223 keti@127.0.0.1 'cd ~/workspace/openpi-hv1 && setsid nohup .venv/bin/python -B -m examples.hv1.pipeline_run --campaign ~/workspace/hv1-vla-runtime/two-track-20260910-r3 --ablations --deadline 2026-09-14T12:00:00+09:00 --allow-gpu-run > ~/workspace/hv1-vla-runtime/two-track-20260910-r3/ablations.log 2>&1 < /dev/null & echo launched'
-```
-
-`setsid`와 `< /dev/null`이 없으면 ssh 세션이 끊길 때 학습이 같이 죽는다.
-진행 확인은 `tail`, 결과는 `ablation_result.json`이다.
-
-**실기 안전 — 실제 캠페인으로 확인했다.**
-
-```
-configure()  data_transforms.inputs : ['HV1Inputs']              <- 배포가 공유하는 config
-make_loader  data_transforms.inputs : ['StateNoise','HV1Inputs'] <- 학습 전용 사본
-```
-
-`deploy_server`는 `registered_config`로만 들어오고 `make_loader`를 호출하지 않는다.
-소스에 `make_loader`/`StateNoise`가 없음을 테스트가 고정한다.
-
-**노이즈가 `HV1Inputs` 앞에 있어야 하는 이유.** delta 타깃이 `HV1Inputs` 안에서
-state 기준으로 계산된다. 뒤에 넣으면 입력과 타깃의 기준이 어긋나 모델이 되돌릴 수 없는
-라벨 잡음이 된다. 앞에 넣으면 타깃이 입력과 **같이** 움직여 복원 가능하다.
-테스트가 이것을 직접 검증한다 — 팔 7축 delta가 이동분을 정확히 흡수하고,
-절대값인 grasp intent(delta index −1)는 전혀 움직이지 않는다.
-
-**크기.** 채널별 학습 std의 1배를 rad 단위로 더한다. 팔 7축 실측 σ =
-`[0.109, 0.150, 0.115, 0.137, 0.105, 0.172, 0.140]` rad. 정규화가 quantile
-방식이고 span/std ≈ 4.4이므로 정규화 공간에서 노이즈와 신호가 **둘 다 0.226** —
-**신호 대 잡음 1:1**이다. 시계를 확실히 망가뜨린다.
-V2가 애매하면 `state_noise_sigma`를 0.5/2.0으로 쓸어보는 것이 다음 수순이다.
-
-**재현성.** 노이즈는 샘플 내용의 결정적 함수다(`crc32(state) × recipe seed`).
-resume이 다른 데이터셋을 학습하지 않는다.
-
-**레시피 안전.** `state_noise_sigma`는 `ABLATION_ONLY_FIELDS`라 절제 실험에만
-붙는다. 트랙 레시피는 필드가 늘지 않는다 — r3의 배포 스냅샷 4개(TODAY30/ALL59 ×
-1000/2000) 전부 저장된 recipe와 `pipeline.recipe()` 결과가 **여전히 일치**함을 확인했다.
-
-### 설계 근거 (V1~V3 실행 완료)
-
-**왜 state를 쓰는가.** 액션이 state에 대한 delta(`delta_state_indices=[0..6,-1]`)이므로
-모델은 좌표 기준으로 state가 필요하지 않다. **에피소드의 어디쯤인지**를 알기 위해서만
-필요하다. 59개 접근 방향이 서로 코사인 0.89~0.99이므로 **팔 자세가 거의 완벽한
-위상 시계(phase clock)** 다. "이 위상의 평균 delta"를 내면 손실 대부분이 해결되고,
-물체 위치는 **언제 멈추는지**만 바꾸는데 그건 프레임 비중도 손실 비중도 작다.
-
-따라서 레버는 두 개다. ㄱ) 시계를 나쁘게 만든다. ㄴ) 멈춤 판단의 손실 비중을 키운다.
-(수집 재설계는 시계를 **불충분하게** 만드는 것이고, 그게 근본 해법이다 — 위 1번.)
-
-**이미지 증강은 넣지 않는다.** 이미지를 덜 신뢰하게 만들면 state 지름길의 상대 가치가
-**올라간다.** 이 실패 모드에는 역효과다. 증강은 모델이 이미 이미지를 쓸 때 일반화를
-돕는 도구이지, 쓰게 만드는 도구가 아니다.
-
-**구현 위치 — 안전 제약 (확인됨).** `HV1Inputs`는 `openpi_run.make_config`의
-`data_transforms`이고 **학습과 배포가 같은 config를 공유한다.** 여기에 dropout/노이즈를
-넣으면 실기 추론에서도 발동한다. 반드시 `pipeline_train.make_loader` 안에서만
-`data`를 복제해 `inputs=[StateNoise(σ), HV1Inputs(p)]`로 **앞에** 끼운다.
-`deploy_server`는 `make_loader`를 호출하지 않으므로 구조적으로 격리된다.
-`HV1Inputs` **앞**이어야 하는 이유: delta 타깃이 그 안에서 계산되므로, 뒤에 넣으면
-입력 state와 타깃 delta의 기준이 어긋나 되돌릴 수 없는 라벨 잡음이 된다.
-
-**state 15→16 마스크 채널은 배제한다.** `state_names`·`norm_stats`·`hand_state_envelope`·
-`CONTRACT_SHA`가 전부 15에 묶여 있어 ROS 계약 변경과 서버 재시작을 강제한다.
-
-**실험 행렬** (기준선 TODAY30-2000 실측: gap −0.00024, 코사인 0.9974)
-
-| 실험 | 변경 | 성격 |
-|---|---|---|
-| ~~V1~~ | `phase_fractions` close 0.15 → 0.45 | **완료 — 개선 없음** (위 결과) |
-| ~~V2~~ | state 노이즈 σ=1.0 | **완료 — 실패. gap이 자기 노이즈 바닥 안이고, 정책만 25배 불안정해졌다** |
-| ~~V3~~ | V1 + V2 | **완료 — 개선 없음** |
-
-**비용.** 학습 안정 구간은 약 0.40 s/update였고 V1 재평가를 포함한 전체 큐는
-2,794초였다. 스냅샷은 실험당 `step_002000` 하나만 남겼으며 실행 후 디스크 여유는
-150GiB다. optimizer restart는 자동 정리됐다.
-
-**측정.** 변형마다 (ㄱ) `evaluate-cross-modal` gap·코사인, (ㄴ) 기존 teacher-forced
-지표가 나빠지지 않았는지, (ㄷ) 예측 궤적 길이 대 실제 파지 거리(기준선 1.060 대 0.699,
-1.5배 초과). **임계값은 정하지 않는다** — 표로 보고하고 선택은 감독자가 한다.
-
-**정직한 한계.** 2번 단독으로 해결되지 않을 수 있다. 물체 위치 정보는 이미지에 실제로
-들어 있으므로(파지 자세끼리 중앙 0.355 rad) 지름길을 막으면 드러날 여지가 있지만,
-30에피소드로 이미지→위치를 배우기엔 데이터가 부족할 수 있다. 부분 개선을 기대하고,
-1번(수집 재설계)은 그대로 필요하다. 다만 이제 **개선 여부를 읽을 수 있다.**
-
-### 실기 활성화까지의 경과 (완료)
-
-1. ~~손 자세 `mode 2` → `set_open 0.6`, `rel_angle` 기준값 대조~~ — 완료 (2026-09-11)
-2. ~~OOD 게이트 통과 확인~~ — 완료. 단 `joint_30`이 원시 q01(1.5509)보다 낮은
-   1.5463이라 ±0.05 마진 덕에 통과했다. 마진을 줄이면 걸린다.
-3. ~~재빌드된 코드로 무송신 live shadow~~ — 완료, 후보 2개 모두 통과
-4. ~~후보 선택~~ — **TODAY30-1000 @ hold 0.1 확정** (독립 2세션 재현)
-5. **손목 카메라 조명 회복** — 작업 영역을 3~4배 밝게. `auto_exposure` 유지한 채
-   `/dev/video8`이 30fps 근처가 나오는지 확인 (확정 사실 7)
-6. ~~실기 활성화 공백 해소~~ — 완료. guardian 20Hz 발행, 정지 서비스, 승인된
-   프로파일 모두 확인
-7. **제한 실기 rollout** ← 지금 여기. 파지 직전·직후 팔 속도를 기록해 확정 사실 10의
-   시연 분포와 대조한다. 폐루프에서 감속·정지가 재현되는지가 닫기 지연 허용의 전제다.
-   첫 실행의 fault 로그에서 `max_tracking_error`와 실제 필요한 `max_step`을 확정한다.
-
 ### 실행 순서
 
 세 터미널이 필요하다. guardian 터미널의 Ctrl-C가 정지 손잡이다.
@@ -579,71 +350,61 @@ fault가 난다.
 
 ## 다음 단계
 
-파이프라인은 끝났다. 남은 것은 **정책이 후반 구간에서 이미지를 보게 만드는 것**이다.
+파이프라인은 끝났다. 남은 것은 **정책이 이미지를 보게 만드는 것**이고,
+코드로 하는 시도는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)에서 셋 다 실패했다.
 
-1. **데이터 수집 설계를 바꾼다.** 물체 위치를 바꾸는 것만으로는 부족하다 — 시작
-   접근 방향까지 달라지도록 물체를 배치해야 이미지가 초기부터 유용해진다. 현재는
-   물체가 흩어져도 접근 방향이 코사인 0.89~0.99로 같다.
-2. **state 의존을 억제한다.** state dropout이나 이미지 증강으로 지름길을 막는
-   방법이 있다. 확정 사실 11이 그 근거다. 학습 설정 변경이므로 검토가 필요하다.
-3. ~~**평가 지표를 바꾼다.**~~ — **완료 (2026-09-11).** teacher-forced 평가는 정답
-   state를 주므로 시각 미사용을 전혀 감지하지 못한다(오전에 파지 타이밍 ±2프레임으로
-   통과했다). 6x6 교차 행렬이 이제 `pipeline_eval evaluate-cross-modal` 서브커맨드다.
+1. **데이터 수집 설계를 바꾼다.** ← 여기다. 물체 위치를 흩는 것만으로는 부족하다.
+   지금도 파지 자세는 중앙 0.355 rad 떨어져 있는데 **시작 접근 방향이 코사인
+   0.89~0.99로 같다.** 물체가 *어디로 갈지*를 바꿔야 이미지가 초기부터 쓸모가 생긴다.
 
-   ```
-   python -B -m examples.hv1.pipeline_eval evaluate-cross-modal \
-     --campaign "$CAMPAIGN" --snapshot "$CAMPAIGN/snapshots/TODAY30/step_001000" \
-     --allow-gpu-run
-   ```
+   | 지표 | 현재 | 목표 |
+   |---|---|---|
+   | 초기 접근 방향 코사인 중앙 | 0.89~0.99 | **≤ 0.3** |
+   | `|d15|` 대 파지 거리 상관 `|r|` | +0.14 | **> 0.6** |
 
-   각 진단 에피소드의 **파지 프레임** state를 모든 진단 에피소드의 이미지와 교차한다
-   (`--group`은 기본 `today_fixed6`, `--frame-offset`으로 앵커 이동).
-   **샘플링 노이즈를 36조합 전체에 고정**한다 — 배포 때는 매 추론 새로 뽑지만,
-   여기서 묻는 것은 "입력이 무엇을 바꿨나"이므로 노이즈가 같이 움직이면 안 된다.
-   결과는 `evaluations/cross_modal/<실험>_<step>_<group>.json`에 쓴다.
+   **수집 전에 기존 59에피소드로 검증할 수 있다** — 배치 후보를 정하면 그 배치가
+   위 두 수치를 만족하는지 시뮬레이션해볼 것. 찍고 나서 알면 늦다.
 
-   **임계값은 적용하지 않고 저장하지도 않는다.** 수치만 기록하고 판단은 감독자 몫이다
-   (AGENTS.md 「받지 않은 임계값을 발명하지 않는다」). GPU lock이 필요하므로
-   `deploy_server`를 먼저 내려야 한다.
+2. **손목 카메라 조명 회복** — 작업 영역을 3~4배 밝게. `auto_exposure`를 유지한 채
+   `/dev/video8`이 30fps 근처인지 확인한다(확정 사실 7). 수동 노출로 fps를
+   맞추지 말 것 — 대비가 무너진다.
 
-   **실행 완료 (2026-09-11).** 서버를 내리고 두 후보 × 두 그룹에 돌렸다.
-   결과는 `evaluations/cross_modal/`에 있다.
+3. **재수집 후 재학습** — 같은 명령으로 돌아간다. 판정은 teacher-forced 점수가
+   아니라 `evaluate-cross-modal`의 gap과 방향 코사인이다.
 
-   **앵커 민감도 — TODAY30-1000 / today_fixed6**
+## 머신 이전 — 새 PC로 옮길 때
 
-   | frame_offset | 대각 중앙 | 비대각 중앙 | gap | 방향 코사인 |
-   |---|---|---|---|---|
-   | +0 | 0.0179 | 0.0172 | +0.00073 | 0.9987 |
-   | +3 | 1.0126 | 1.0133 | −0.00073 | 0.9764 |
-   | **+8** | **1.0165** | **1.0160** | **+0.00049** | **0.9955** |
-   | +15 | 1.0154 | 1.0155 | −0.00012 | 0.9989 |
-   | +30 | 1.0147 | 1.0142 | +0.00049 | 0.9950 |
+새 PC는 현재 **다른 서브넷(10.252.x)** 이라 현장에서 도달하지 않는다.
+로봇 실험실 네트워크에 붙인 뒤에야 작업할 수 있다.
 
-   **두 배포 후보 × 두 진단 그룹 (offset +8)**
+**옮겨야 하는 것은 생각보다 작다.** 92 GB 중 대체 불가능한 것은 302 MB뿐이다.
 
-   | 스냅샷 | 그룹 | gap | 방향 코사인 |
-   |---|---|---|---|
-   | TODAY30-1000 | today_fixed6 | +0.00049 | 0.9955 |
-   | TODAY30-1000 | old_fixed6 | −0.00024 | 0.9984 |
-   | ALL59-2000 | today_fixed6 | +0.00040 | 0.9992 |
-   | ALL59-2000 | old_fixed6 | +0.00049 | 0.9968 |
+| 대상 | 크기 | 방법 |
+|---|---|---|
+| **원본 녹화** `keti_humanoid_ros2/datasets/` | **302 MB** | **반드시 복사. 유일한 대체 불가 자산** |
+| 코드 | 5.6 MB | `git clone` — repo에 다 있다 |
+| 배포 스냅샷 `snapshots/TODAY30/step_001000` | 4.9 GB | 복사(재학습보다 싸다) |
+| 캠페인 메타 `manifest/registry/assets/export.json/evaluations` | ~20 MB | 복사. 스냅샷 신뢰 체인이 여기 걸려 있다 |
+| 컨테이너 이미지 `keti-humanoid:jazzy` | 6.1 GB | `docker save`/`load` 또는 재빌드 |
+| ROS overlay `vla_ws` | 235 MB | **재빌드.** 소스는 `examples/hv1/ros/`에 있다 |
+| `.venv` | 7.8 GB | **재생성.** `uv.lock` 고정 |
+| `cache/` | 24 GB | 재다운로드 가능하나 pi05_base 11.6 GB는 복사가 빠르다 |
+| 나머지 스냅샷·로그 | ~45 GB | 선택. 없어도 현재 배포는 된다 |
 
-   **결론: 두 후보 모두 카메라를 쓰지 않는다.** 장면을 통째로 바꿔도 파지 판단이
-   0.1% 미만 움직이고 팔 방향도 안 돈다. 확정 사실 11이 앵커 5개 × 후보 2개 ×
-   그룹 2개에서 재현됐다 — 단일 측정이 아니라 견고한 결과다.
+**최소 이전 ≈ 12 GB**, 전체 충실 이전 ≈ 92 GB.
 
-   **앵커 함정 (실행 중 발견).** `grasp_frames[0]`을 그대로 쓰면 안 된다.
-   12개 진단 에피소드 **전부** 파지 프레임에서 예측 intent가 0.003~0.033이고
-   +1~+7 프레임 뒤에야 0.5를 넘는다. offset +0의 gap 0.0007은 **0.018과 0.017을
-   비교한 값**이라 아무 의미가 없다. 그래서 기본값을 실측 최대 지연(+7)을 넘는
-   **+8**로 잡았고, 기록의 `diagonal_intent_median`이 0에 가까우면 앵커가 빗나간
-   것이니 gap을 읽지 말라는 `interpretation` 필드를 넣었다.
+옮긴 뒤 확인 순서:
 
-   덤으로 알게 된 것: **intent 헤드는 예측이 아니라 반응이다.** 파지 3프레임 전에
-   추론한 15스텝 청크에는 상승이 전혀 없다(수평선 안에 해당 프레임이 들어 있는데도).
-   현재 팔 자세를 읽을 뿐 장면으로 앞을 내다보지 않는다 — state 지름길과 같은 이야기다.
+1. `git clone` 후 `uv sync` → `pytest examples/hv1/tests -q`가 통과하는가
+2. 원본 302 MB의 파일 해시가 이전과 같은가 (`pipeline verify`로 manifest 대조)
+3. `vla_ws` 재빌드 후 `core.py` 해시가 repo와 **byte 일치**하는가
+4. `deploy_server` 기동 → `/health`의 `adapter_core_sha256`가 위 둘과 일치하는가
+5. ROS domain·MQTT 도달 확인 후에야 **guardian → vla_client** 순으로 실기
 
-### 이번 세션에 확보된 실기 기준선
+**접속 정보는 이 저장소에 넣지 않는다.** GitHub로 푸시되는 공개 이력이다.
+호스트·계정·비밀번호는 git 밖(`~/workspace/`의 로컬 노트나 사내 채널)에 둔다.
+
+### 실기 기준선 (2026-09-11 측정)
 
 | 실행 | 앙상블 | 지속 | measured 누적 | 순변위 | 스텝 p99 | 종료 |
 |---|---|---|---|---|---|---|
@@ -655,93 +416,6 @@ fault가 난다.
 
 앙상블은 진동을 5.6배 줄이고 순변위를 1.4배 늘렸다. 007에서 진동이
 0.0095 -> 0.0171로 증폭되던 것이 010에서 0.0055 -> 0.0047로 안정됐다.
-
-## 정리 작업
-
-### 완료 (2026-09-11)
-
-- **B. `metrics.py` 분리** — `transition_metrics` / `condition_intents` /
-  `cross_modal_matrix`가 캠페인 모듈 밖으로 나왔다. `pipeline_eval`은 재수출만 한다.
-- **C1. `overnight_*` 6파일 삭제** — leaf island 확인 후 제거. `test_overnight.py`(13개)는
-  사라졌고 `test_policy_wire.py`는 남았다.
-- **C2. `deploy_server` legacy 분기 제거** — `--registry`가 argparse 단계부터 필수다.
-- **C3. `readapt_*` 5파일(1,398줄) 삭제** — 테스트를 먼저 이관한 뒤 지웠다.
-  `test_readapt.py`(31개) + 통합 1개 → `test_pipeline.py` +24, 새 `test_native.py` 13개,
-  `test_metrics.py` +11, `test_artifacts.py` +2, 새 `test_pipeline_integration.py` 1개.
-  스위트는 141 → 157개. 두 캠페인 모듈은 통합하지 않고 은퇴시켰다 —
-  `readapt`는 N/M 혼합·배치 스케줄·정규화 승인 게이트를 갖고 있었고 two-track에는
-  대응물이 없다. recipe를 JSON으로 내리는 일은 남는 캠페인이 하나뿐이라 무의미해졌다.
-
-이관에서 새로 확보한 것: `native.py`의 소스 포맷 계약(이전에는 readapt 경로로만
-간접 검증됐다), `examples/hv1/*.py` 전체에 로봇 I/O가 없다는 검사, 그리고
-샘플러가 지목한 프레임이 실제로 트레이너에 도착하는지의 검증 —
-각 에피소드 영상에 `25 + 공통 export 인덱스` 밝기를 심어 배치에서 되읽는다.
-
-- **ruff 정리** — 8파일에 `ruff format`과 isort를 적용했다. AST 동일(import 재정렬
-  2개 제외). `ros/**`는 **제외**했다 — `CORE_SOURCE_SHA256`이 `core.py` 자기
-  바이트의 sha256이라 포맷만 해도 서버·클라이언트 해시 합의가 깨지고 양쪽 재시작을
-  강제한다. 실행 사본과 repo 사본은 `59775ee4`로 계속 일치한다.
-- **C4. `two_track_*` → `pipeline*`** — 5모듈 + 테스트 2개 `git mv`.
-  `deploy_server`는 `pipeline_eval.registered_config`를 lazy import한다.
-  `core.py` 무변경 → **서버 재시작 불필요**.
-
-  이름을 바꾸지 **않은** 것: `SCHEMA = "hv1_two_track_v1"`. 기존 manifest·schedule·
-  snapshot·registry 전부에 박혀 있고 `deploy_server`가 registry를 이것으로 검사한다.
-  모듈 이름은 코드, 스키마는 디스크의 데이터다. r3 캠페인의 실제 registry로
-  `registered_config`를 돌려 확인했다 — TODAY30-1000이 그대로 로드된다.
-
-  부수적으로 `metrics.py`가 `implementation_sha256`에서 빠져 있던 것을 고쳤다.
-  B에서 코드가 `pipeline_eval.py` 밖으로 나가면서 해시 추적에서 누락됐었다.
-
-- **C5. 날짜 박힌 `.md` 정리** — 목적지를 `hv1-vla-runtime/logs/`에서 바꿨다.
-  런타임 디렉터리는 git에 없고 **git이 두 머신의 유일한 공유 채널**이므로, 거기로
-  옮기면 Windows 에이전트가 문서를 못 읽는다. 특히 `TWO_TRACK_20260910.md`는
-  현행 runbook이라 살아 있는 절차를 공유 채널에서 빼는 셈이었다.
-
-  | 이전 | 이후 | 이유 |
-  |---|---|---|
-  | `TWO_TRACK_20260910.md` | `TRAINING.md` | 현행 절차. `DEPLOYMENT.md`의 짝 — 학습은 TRAINING, 배포는 DEPLOYMENT |
-  | `OVERNIGHT_20260909.md` | `docs/OVERNIGHT_20260909.md` | 은퇴 기록. `docs/INITIAL_WORKFLOW_20260909.md`가 선례 |
-  | `READAPT_20260910.md` | `docs/READAPT_20260910.md` | 은퇴 기록 |
-
-  최상위는 이제 `README.md` / `STATUS.md` / `TRAINING.md` / `DEPLOYMENT.md` 네 개이며
-  전부 날짜가 없다. `docs/`에 날짜 박힌 기록 3개. 링크 15개 전부 확인했다.
-  README의 「유지할 계약」에 남아 있던 N/M(readapt) 항목도 트랙 계약으로 교체했다.
-
-- **C6. 진입점 정리 — 전제가 틀렸다.** "20개를 `cli.py` 디스패처로 5개로 합친다"는
-  계획이었는데, 전수 조사하니 실제 표면은 **12모듈 / 33명령**이었고 그중
-  **살아 있는 캠페인 경로는 이미 정확히 5개**였다:
-  `pipeline` / `pipeline_run` / `pipeline_train` / `pipeline_eval` / `deploy_server`.
-  (TRAINING·DEPLOYMENT·STATUS가 지시하는 명령 13개를 뽑아 확인했다.)
-
-  즉 문제는 디스패처가 많은 게 아니라 **은퇴한 세대의 진입점이 호출자가 사라진 뒤에도
-  남아 있던 것**이었다. 디스패처를 넣으면 문서화된 명령 13개가 전부 바뀌고
-  3터미널 실기 절차까지 바뀌는데 기능 이득은 0이다. **넣지 않았다.**
-
-  삭제한 죽은 CLI(둘 다 호출자 0):
-
-  | 모듈 | 지운 것 | 결과 |
-  |---|---|---|
-  | `native.py` | `main`, `scan`, `export`, `DUMMIES`/`SUSPECT`/`VALIDATION` | 348 → 157줄, 라이브러리 |
-  | `openpi_run.py` | `main`, `check_data`, `compute_stats` | 228 → 93줄, 라이브러리 |
-
-  `native.scan`/`export`는 2026-09-09 수집 경로로 `readapt`만 쓰던 것이고,
-  `pipeline._scan`/`pipeline.export`가 이를 대체하며 테스트도 있다.
-  복구는 `git show d82ca51:examples/hv1/native.py`.
-
-  남은 표면 **10모듈 / 28명령**: 캠페인 5 + 운영 도구 4(`deploy_smoke`,
-  `shadow_eval`, `source_contract`, `verify_export`) + 합성 검수 1(`cli`).
-  README에 전체 지도를 넣고, `test_artifacts.py`가 `main()`을 가진 모듈 집합을
-  선언 목록과 비교해 고정한다 — 새 진입점이 생기면 테스트가 깨진다.
-  `--help` 검사도 5개에서 10개 전부로 넓혔다(학습·ROS를 import하지 않음을 증명).
-
-### 남은 것 — 판단 필요
-
-- **합성 검수 섬(`cli`/`review`/`export`/`demo`/`adapter`)** — 캠페인 경로에서
-  도달하지 않는다. `overnight_*`와 같은 leaf island 구조지만, README가 의도적으로
-  보존해 왔고 테스트 20개(`test_workflow.py` 15, `test_policy_wire.py` 1,
-  `test_ros_projection.py` 5 중 일부)가 여기에 걸려 있다. 삭제는 감독자 판단이다.
-  `workflow.py`는 제외 — `native`/`transforms`가 `validate_profile`을 쓰는 본선이다.
 
 ## 산출물
 

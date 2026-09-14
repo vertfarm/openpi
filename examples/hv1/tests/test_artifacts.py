@@ -68,8 +68,9 @@ def test_evaluation_and_configuration_never_import_the_trainer():
 
 
 def test_the_training_pipeline_never_touches_the_robot():
-    """Robot I/O lives only under `ros/`. A trainer or evaluator that could
-    publish a command would put a GPU job on the same wire as the arm."""
+    """Robot I/O lives under `ros/` and `tools/` and nowhere else. A trainer or
+    evaluator that could publish a command would put a GPU job on the same wire
+    as the arm; the operator tools are supervised and run in the container."""
     root = Path(artifacts.__file__).parent
     for path in sorted(root.glob("*.py")):
         text = path.read_text(encoding="utf-8")
@@ -77,6 +78,21 @@ def test_the_training_pipeline_never_touches_the_robot():
             assert forbidden not in text, f"{path.name}: {forbidden}"
     ros = root / "ros/keti_humanoid_inference/keti_humanoid_inference"
     assert "import rclpy" in (ros / "node.py").read_text(encoding="utf-8")
+
+
+def test_the_operator_tools_travel_with_the_repository():
+    """They used to live loose in ~/workspace, where a machine change would lose
+    them - and STATUS cites the camera one as the way to settle a geometry
+    question that already cost an afternoon once."""
+    tools = Path(artifacts.__file__).parent / "tools"
+    names = {path.name for path in tools.glob("*.py")}
+    assert {"check_camera_input.py", "return_to_start.py"} <= names
+    for path in sorted(tools.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        assert text.startswith('"""'), f"{path.name} must say what it is on line one"
+        # They drive the arm, so they belong to the supervised path, not the
+        # host pipeline - and must never be imported by it.
+        assert "import rclpy" in text
 
 
 def test_immutable_manifest_and_mutable_progress(tmp_path):
