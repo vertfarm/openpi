@@ -17,7 +17,7 @@ if ! [[ "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
   exit 1
 fi
 command_line="$(tr '\0' ' ' <"/proc/$pid/cmdline")"
-if [[ "$command_line" != *"serve_pi05_droid_jointpos_velocity.py"* ]]; then
+if [[ "$command_line" != *"serve_pi05_droid_jointpos_velocity"*".py"* ]]; then
   printf 'SERVER_STATUS=ERROR reason=pid_identity_mismatch pid=%s command=%s\n' "$pid" "$command_line" >&2
   exit 1
 fi

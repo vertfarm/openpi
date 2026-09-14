@@ -19,7 +19,7 @@ if [[ "$(stat -c '%u' "/proc/$pid")" != "$(id -u)" ]]; then
   exit 1
 fi
 command_line="$(tr '\0' ' ' <"/proc/$pid/cmdline")"
-if [[ "$command_line" != *"serve_pi05_droid_jointpos_velocity.py"* ]]; then
+if [[ "$command_line" != *"serve_pi05_droid_jointpos_velocity"*".py"* ]]; then
   printf 'ERROR refusing to stop pid=%s command=%s\n' "$pid" "$command_line" >&2
   exit 1
 fi
