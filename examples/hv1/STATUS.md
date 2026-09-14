@@ -374,8 +374,9 @@ fault가 난다.
 
 ## 머신 이전 — 새 PC로 옮길 때
 
-새 PC는 현재 **다른 서브넷(10.252.x)** 이라 현장에서 도달하지 않는다.
-로봇 실험실 네트워크에 붙인 뒤에야 작업할 수 있다.
+**최소 이전과 오프라인 검증은 완료됐다.** 현장과 새 PC가 서로 다른 서브넷이라
+Windows를 신뢰 경계가 아닌 전송 브리지로만 사용했고, 각 홉에서 SHA-256을 다시
+검사했다. 접속 정보와 비밀번호는 repo에 넣지 않았다.
 
 **옮겨야 하는 것은 생각보다 작다.** 92 GB 중 대체 불가능한 것은 302 MB뿐이다.
 
@@ -393,7 +394,36 @@ fault가 난다.
 
 **최소 이전 ≈ 12 GB**, 전체 충실 이전 ≈ 92 GB.
 
-옮긴 뒤 확인 순서:
+현재 검증 결과:
+
+- 원본 59 episode가 manifest와 전수 일치했다. manifest SHA-256은
+  `8064bb4c017a224b2f7ce7965e16119ee5efd70809b65439f273d996af7938e5`다.
+- OpenPI는 원격 canonical 브랜치에서 재생성했고 JAX가 새 GPU를 `CudaDevice(id=0)`으로
+  잡는다. CPU 회귀 182개와 ROS 제외 lint/format 검사가 통과했다.
+- 새 PC를 구성한 저자의 `keti_humanoid_ros2` checkout은 현장 기준과 같은 `bfb84cb`다.
+  기존 dirty는 `.entrypoint.sh`의 설명 주석 8줄 삭제뿐이며 실행 설정은 같아 보존했다.
+- 저자가 만든 9/14 Docker 이미지를 기본 `keti-humanoid:jazzy`로 유지한다. 현장에서
+  가져온 9/9 이미지는 `keti-humanoid:jazzy-field-20260909`로 별도 보존했다. 새 이미지는
+  현장 이미지보다 RealSense 관련 ROS 패키지 3종과 broadcaster 2종이 더 있다.
+- 기존 `hand_ws`·`kh_ws` 위에 `vla_ws`를 symlink build했다. repo source, `vla_ws`
+  source, 실제 import된 `core.py`가 모두
+  `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c`다.
+- TODAY30-1000 deploy server의 `/health`가 snapshot/stat/contract/core 해시를 모두
+  통과했다. 저장 관측 4 frame의 loopback smoke는 62~75 ms였고 로봇 명령은 0건이다.
+  결과는 `~/workspace/hv1-new-pc-validation-20260914/deploy-smoke-260910-000003.json`,
+  SHA-256은 `1a6e3c9fd2487558c327970d3fc908dfb810ecd4805f1fe33ed54957d7e2f19c`다.
+  검증 후 deploy server를 정상 종료해 GPU lock과 port 8000을 비웠다.
+
+남은 게이트:
+
+- 새 PC에서 로봇망 MQTT가 아직 도달하지 않는다. ROS domain 10 노드, guardian,
+  `vla_client`는 실행하지 않았다. 로봇 실험실 네트워크에 연결하고 감독자가 있을 때만
+  아래 순서를 계속한다.
+- 격리 domain 213의 ROS 경계 test는 기존 test fixture가 새 필수 인자
+  `ensemble_decay`를 만들지 않아 2건 실패했다. 빌드와 실행 import는 성공했으며,
+  금지된 `ros/**`를 이번 이전에서 고치지 않았다.
+
+실기 전 확인 순서:
 
 1. `git clone` 후 `uv sync` → `pytest examples/hv1/tests -q`가 통과하는가
 2. 원본 302 MB의 파일 해시가 이전과 같은가 (`pipeline verify`로 manifest 대조)
