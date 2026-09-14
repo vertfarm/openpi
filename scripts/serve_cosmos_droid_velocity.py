@@ -23,7 +23,8 @@ Response
     actions  float32 [horizon, 8]  -- 7 normalized joint velocities + 1 gripper position
 
 Usage
-    python scripts/serve_cosmos_droid_velocity.py --upstream-port 8010 --port 8001
+    python scripts/serve_cosmos_droid_velocity.py --upstream-port 8010 --port 8000
+    # or via the launcher, which also starts the Cosmos server: scripts/start_cosmos_droid_velocity.sh 3
 """
 
 from __future__ import annotations
@@ -37,11 +38,45 @@ import time
 
 import numpy as np
 import tyro
+import websockets.sync.client
+from openpi_client import msgpack_numpy
+from openpi_client import websocket_client_policy
 
 from openpi.policies import cosmos_droid_policy
 from openpi.serving import websocket_policy_server
 
 logger = logging.getLogger(__name__)
+
+
+class _UpstreamClient(websocket_client_policy.WebsocketClientPolicy):
+    """openpi's client with the websocket keepalive disabled on the upstream link.
+
+    The Cosmos server runs inference synchronously inside its asyncio handler, so it cannot
+    answer keepalive pings while a request is in flight. openpi's client keeps the websockets
+    default (ping every 20 s, drop the link after 20 s without a pong), which turns any inference
+    slower than roughly 40 s -- the first request on an A6000 -- into a spurious
+    ``ConnectionClosedError: keepalive ping timeout``. Liveness is bounded elsewhere: the
+    upstream TCP probe in ``_connect`` and the caller's own timeout.
+    """
+
+    def _wait_for_server(self):
+        logging.info(f"Waiting for server at {self._uri}...")
+        while True:
+            try:
+                headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
+                conn = websockets.sync.client.connect(
+                    self._uri,
+                    compression=None,
+                    max_size=None,
+                    additional_headers=headers,
+                    ping_interval=None,
+                    ping_timeout=None,
+                )
+                metadata = msgpack_numpy.unpackb(conn.recv())
+                return conn, metadata
+            except ConnectionRefusedError:
+                logging.info("Still waiting for server...")
+                time.sleep(5)
 
 
 @dataclasses.dataclass
@@ -89,8 +124,6 @@ class CosmosDroidVelocityPolicy:
         self._requests = 0
 
     def _connect(self):
-        from openpi_client import websocket_client_policy
-
         host, port = self._args.upstream_host, self._args.upstream_port
         if self._args.upstream_timeout_s > 0:
             deadline = time.monotonic() + self._args.upstream_timeout_s
@@ -106,7 +139,7 @@ class CosmosDroidVelocityPolicy:
                         ) from exc
                     time.sleep(2.0)
         logger.info("Upstream connected: %s:%d", host, port)
-        return websocket_client_policy.WebsocketClientPolicy(host, port)
+        return _UpstreamClient(host, port)
 
     def _build_request(self, obs: dict) -> dict:
         if "observation/image" in obs:
