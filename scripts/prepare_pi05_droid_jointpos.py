@@ -1,4 +1,4 @@
-"""Cache and checksum the official pi05_droid_jointpos JAX checkpoint."""
+"""Cache and checksum a pi05_droid_jointpos checkpoint (JAX params/ or PyTorch model.safetensors)."""
 
 from __future__ import annotations
 
@@ -40,9 +40,13 @@ def _manifest_is_reusable(manifest_path: pathlib.Path, source: str) -> bool:
         return False
     return (
         manifest.get("source") == source
-        and (local_path / "params").is_dir()
+        and _has_weights(local_path)
         and (local_path / "assets" / "droid" / "norm_stats.json").is_file()
     )
+
+
+def _has_weights(local_path: pathlib.Path) -> bool:
+    return (local_path / "params").is_dir() or (local_path / "model.safetensors").is_file()
 
 
 def main(args: Args) -> None:
@@ -52,10 +56,13 @@ def main(args: Args) -> None:
         return
 
     local_path = download.maybe_download(args.checkpoint_dir)
-    params_path = local_path / "params"
     norm_stats_path = local_path / "assets" / "droid" / "norm_stats.json"
-    if not params_path.is_dir():
-        raise FileNotFoundError(f"Missing JAX params directory: {params_path}")
+    if not _has_weights(local_path):
+        raise FileNotFoundError(
+            f"Missing model weights: expected JAX directory {local_path / 'params'} "
+            f"or PyTorch file {local_path / 'model.safetensors'}"
+        )
+    weight_format = "jax" if (local_path / "params").is_dir() else "pytorch"
     if not norm_stats_path.is_file():
         raise FileNotFoundError(f"Missing DROID norm stats: {norm_stats_path}")
 
@@ -75,6 +82,7 @@ def main(args: Args) -> None:
     manifest = {
         "source": args.checkpoint_dir,
         "local_path": str(local_path),
+        "weight_format": weight_format,
         "generated_at": datetime.datetime.now(datetime.UTC).isoformat(),
         "file_count": len(files),
         "total_bytes": total_bytes,
@@ -88,6 +96,7 @@ def main(args: Args) -> None:
 
     print(f"checkpoint_source={args.checkpoint_dir}")
     print(f"checkpoint_local={local_path}")
+    print(f"checkpoint_weight_format={weight_format}")
     print(f"checkpoint_files={len(files)}")
     print(f"checkpoint_bytes={total_bytes}")
     print(f"norm_stats_sha256={manifest['norm_stats_sha256']}")

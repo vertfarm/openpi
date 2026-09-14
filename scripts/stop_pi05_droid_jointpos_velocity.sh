@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-/data/keti/snu/home/runtime/pi05-droid-jointpos-velocity}"
+RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-/data/keti/snu/home/runtime/pi05-droid-jointpos-velocity-team2}"
 PID_FILE="$RUNTIME_ROOT/server.pid"
 
 if [[ ! -f "$PID_FILE" ]]; then
@@ -19,7 +19,7 @@ if [[ "$(stat -c '%u' "/proc/$pid")" != "$(id -u)" ]]; then
   exit 1
 fi
 command_line="$(tr '\0' ' ' <"/proc/$pid/cmdline")"
-if [[ "$command_line" != *"serve_pi05_droid_jointpos_velocity.py"* ]]; then
+if [[ "$command_line" != *"serve_pi05_droid_jointpos_velocity"*".py"* ]]; then
   printf 'ERROR refusing to stop pid=%s command=%s\n' "$pid" "$command_line" >&2
   exit 1
 fi
