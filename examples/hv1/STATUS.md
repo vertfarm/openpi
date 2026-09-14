@@ -400,8 +400,10 @@ Windows를 신뢰 경계가 아닌 전송 브리지로만 사용했고, 각 홉�
   `8064bb4c017a224b2f7ce7965e16119ee5efd70809b65439f273d996af7938e5`다.
 - OpenPI는 원격 canonical 브랜치에서 재생성했고 JAX가 새 GPU를 `CudaDevice(id=0)`으로
   잡는다. CPU 회귀 182개와 ROS 제외 lint/format 검사가 통과했다.
-- 새 PC를 구성한 저자의 `keti_humanoid_ros2` checkout은 현장 기준과 같은 `bfb84cb`다.
-  기존 dirty는 `.entrypoint.sh`의 설명 주석 8줄 삭제뿐이며 실행 설정은 같아 보존했다.
+- 새 PC를 구성한 저자의 `keti_humanoid_ros2` checkout은 현장 기준·GitHub `main`과
+  같은 `bfb84cb`다. `.entrypoint.sh`의 설명 주석 8줄만 빠졌던 로컬 변경은 원본으로
+  복원했다. 재생성 가능한 `ros2/vla_ws/`는 삭제하지 않고 이 PC의 Git local exclude로
+  분류했으며, ROS2와 OpenPI 작업트리는 모두 clean이다.
 - 저자가 만든 9/14 Docker 이미지를 기본 `keti-humanoid:jazzy`로 유지한다. 현장에서
   가져온 9/9 이미지는 `keti-humanoid:jazzy-field-20260909`로 별도 보존했다. 새 이미지는
   현장 이미지보다 RealSense 관련 ROS 패키지 3종과 broadcaster 2종이 더 있다.
@@ -413,6 +415,13 @@ Windows를 신뢰 경계가 아닌 전송 브리지로만 사용했고, 각 홉�
   결과는 `~/workspace/hv1-new-pc-validation-20260914/deploy-smoke-260910-000003.json`,
   SHA-256은 `1a6e3c9fd2487558c327970d3fc908dfb810ecd4805f1fe33ed54957d7e2f19c`다.
   검증 후 deploy server를 정상 종료해 GPU lock과 port 8000을 비웠다.
+- 원격 정리 후 같은 검증을 다시 실행했다. 회귀 182개와 원본 59 episode 전수 해시가
+  다시 통과했고, JAX는 RTX 5090을 `CudaDevice(id=0)`으로 잡았다. 저장 관측 4 frame의
+  왕복은 62~65 ms, 로봇 명령은 0건이었다. 결과는
+  `~/workspace/hv1-new-pc-validation-20260914/recheck-20260914-154722.json`, SHA-256은
+  `0d89cd6e3582e2b6d8bade02f878d754f8b9012438079d1e16224e8c654e5351`다. 종료 후
+  GPU lock을 실제로 다시 획득할 수 있었고 port 8000과 관련 프로세스가 비어 있음을
+  확인했다.
 
 남은 게이트:
 
