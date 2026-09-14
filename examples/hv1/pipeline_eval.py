@@ -229,6 +229,115 @@ near zero the anchor missed and the gap says nothing.
 """
 
 
+CROSS_MODAL_SEED = 20260911
+"""The shared sampling draw for one cross-modal matrix.
+
+Held fixed across all 36 combinations so the only thing that moves is the input.
+Changing it re-rolls the whole matrix, which is exactly what `cross_modal_floor`
+does to find out how much the gap moves on its own.
+"""
+
+
+def cross_modal_floor(campaign, snapshot, *, group="today_fixed6", frame_offset=GRASP_ANCHOR_OFFSET, seeds=8):
+    """How far does `intent_scene_gap` wander when only the sampling draw changes?
+
+    Without this number a gap cannot be read. On 2026-09-14 the V2 ablation came
+    back at -0.0226 on one diagnostic group and +0.0099 on the other - opposite
+    signs, which is either a real effect the groups disagree about or the metric
+    moving under its own noise. The same checkpoint measured at several seeds
+    says which, because nothing about the policy or the inputs changes between
+    them.
+
+    No threshold is applied. The spread goes in the record next to the gaps a
+    supervisor is comparing it against.
+    """
+    if seeds < 2:
+        raise ContractError("a floor needs at least two draws")
+    campaign, snapshot = Path(campaign).resolve(), Path(snapshot).resolve()
+    manifest = pipeline.verify_campaign(campaign, raw=True)
+    if not snapshot.is_relative_to(campaign / "snapshots"):
+        raise ContractError("snapshot is outside the campaign")
+    record = snapshot_identity(snapshot)
+    recipe = record["recipe"]
+    config, export = configure(campaign, recipe)
+    from filelock import FileLock
+
+    from openpi.policies.policy_config import create_trained_policy
+
+    data = config.data.create(config.assets_dirs, config.model)
+    dataset = local_dataset(data, config.model, export["splits"]["train"]["root"])
+    offsets, offset = {}, 0
+    for episode in manifest["episodes"]:
+        offsets[episode["id"]] = offset
+        offset += episode["frames"]
+    cases = _cross_modal_cases(manifest, dataset, offsets, group, frame_offset)
+    draws = []
+    with FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0):
+        policy = create_trained_policy(config, snapshot, default_prompt=PROMPT, sample_kwargs={"num_steps": 10})
+        for index in range(seeds):
+            seed = CROSS_MODAL_SEED + index
+            noise = np.random.default_rng(seed).normal(size=(15, 32)).astype(np.float32)
+
+            def predict(state, images, noise=noise):
+                return np.asarray(
+                    policy.infer({"state": state, "images": images, "prompt": PROMPT}, noise=noise)["actions"]
+                )
+
+            matrix = cross_modal_matrix(predict, cases)
+            draws.append(
+                dict(
+                    seed=seed,
+                    diagonal_intent_median=matrix["diagonal_intent_median"],
+                    intent_scene_gap=matrix["intent_scene_gap"],
+                    direction_cosine_median=matrix["direction_cosine_median"],
+                )
+            )
+            print(json.dumps(dict(seed=seed, gap=matrix["intent_scene_gap"])), flush=True)
+    gaps = np.array([draw["intent_scene_gap"] for draw in draws])
+    cosines = np.array([draw["direction_cosine_median"] for draw in draws])
+    result = dict(
+        schema="hv1_cross_modal_floor_v1",
+        manifest_sha256=manifest["sha256"],
+        snapshot=str(snapshot),
+        snapshot_sha256=file_hash(snapshot / "snapshot.json"),
+        experiment=recipe["name"],
+        step=record["step"],
+        diagnostic_group=group,
+        frame_offset=frame_offset,
+        seeds=seeds,
+        draws=draws,
+        gap_min=float(gaps.min()),
+        gap_max=float(gaps.max()),
+        gap_std=float(gaps.std(ddof=1)),
+        gap_abs_max=float(np.abs(gaps).max()),
+        cosine_min=float(cosines.min()),
+        cosine_max=float(cosines.max()),
+        robot_commands_sent=0,
+        threshold_applied=False,
+        note=(
+            "Same checkpoint, same inputs, only the sampling draw differs. A gap "
+            "from any other run is only evidence of scene use if it sits outside "
+            "this spread."
+        ),
+        complete=True,
+    )
+    directory = campaign / "evaluations" / "cross_modal"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"floor_{recipe['name']}_{record['step']:06d}_{group}_p{frame_offset:+03d}.json"
+    atomic_json(path, result)
+    return {
+        "complete": True,
+        "path": str(path),
+        "experiment": recipe["name"],
+        "group": group,
+        "seeds": seeds,
+        "gap_min": result["gap_min"],
+        "gap_max": result["gap_max"],
+        "gap_std": result["gap_std"],
+        "note": result["note"],
+    }
+
+
 def evaluate_cross_modal(campaign, snapshot, *, group="today_fixed6", frame_offset=GRASP_ANCHOR_OFFSET):
     """Does the policy answer from the scene, or from the arm?
 
@@ -266,7 +375,7 @@ def evaluate_cross_modal(campaign, snapshot, *, group="today_fixed6", frame_offs
     cases = _cross_modal_cases(manifest, dataset, offsets, group, frame_offset)
     with FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0):
         policy = create_trained_policy(config, snapshot, default_prompt=PROMPT, sample_kwargs={"num_steps": 10})
-        noise = np.random.default_rng(20260911).normal(size=(15, 32)).astype(np.float32)
+        noise = np.random.default_rng(CROSS_MODAL_SEED).normal(size=(15, 32)).astype(np.float32)
 
         def predict(state, images):
             return np.asarray(
@@ -287,7 +396,7 @@ def evaluate_cross_modal(campaign, snapshot, *, group="today_fixed6", frame_offs
         frame_offset=frame_offset,
         anchors=[{"episode": case["name"], "frame": case["frame"]} for case in cases],
         denoise=10,
-        shared_noise_seed=20260911,
+        shared_noise_seed=CROSS_MODAL_SEED,
         robot_commands_sent=0,
         closed_loop=False,
         threshold_applied=False,
@@ -748,6 +857,7 @@ def main():
             "sweep-filter",
             "sweep-filter-finetunes",
             "evaluate-cross-modal",
+            "cross-modal-floor",
         ],
     )
     parser.add_argument("--campaign", required=True)
@@ -766,6 +876,7 @@ def main():
         default=GRASP_ANCHOR_OFFSET,
         help=f"frames past the recorded grasp to anchor each case on; default {GRASP_ANCHOR_OFFSET}",
     )
+    parser.add_argument("--seeds", type=int, default=8, help="cross-modal-floor: how many sampling draws to compare")
     args = parser.parse_args()
     if args.command in ("evaluate", "evaluate-intents"):
         if not args.allow_gpu_run or not args.snapshot:
@@ -785,6 +896,12 @@ def main():
         if not args.allow_gpu_run or not args.snapshot:
             parser.error("evaluate-cross-modal requires --snapshot and --allow-gpu-run")
         result = evaluate_cross_modal(args.campaign, args.snapshot, group=args.group, frame_offset=args.frame_offset)
+    elif args.command == "cross-modal-floor":
+        if not args.allow_gpu_run or not args.snapshot:
+            parser.error("cross-modal-floor requires --snapshot and --allow-gpu-run")
+        result = cross_modal_floor(
+            args.campaign, args.snapshot, group=args.group, frame_offset=args.frame_offset, seeds=args.seeds
+        )
     elif args.command == "register":
         if not args.snapshot or not args.reviewer:
             parser.error("--snapshot and --reviewer required")

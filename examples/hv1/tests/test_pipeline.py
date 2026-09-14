@@ -481,6 +481,21 @@ def test_an_ablation_schedule_follows_its_own_phase_weights():
     assert len(schedule["train_episode_ids"]) == 30
 
 
+def test_a_floor_needs_more_than_one_draw(tmp_path):
+    """One draw is a measurement, not a spread - and a spread is the whole point."""
+    with pytest.raises(ContractError, match="at least two draws"):
+        pipeline_eval.cross_modal_floor(tmp_path, tmp_path / "snapshots/x/step_002000", seeds=1)
+
+
+def test_the_matrix_and_its_floor_use_the_same_base_seed():
+    """The floor walks seeds starting from the one a single matrix uses, so the
+    first draw reproduces the number it is meant to explain."""
+    source = Path(pipeline_eval.__file__).read_text(encoding="utf-8")
+    assert "np.random.default_rng(CROSS_MODAL_SEED)" in source
+    assert "seed = CROSS_MODAL_SEED + index" in source
+    assert "shared_noise_seed=CROSS_MODAL_SEED" in source
+
+
 def test_the_runner_looks_for_the_file_the_evaluator_writes(tmp_path):
     """If these two disagreed the ablation runner would never see its own work
     and would retrain forever. The evaluator's name is built here from the same
