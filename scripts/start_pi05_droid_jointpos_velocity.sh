@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 GPU_INDEX="${1:-3}"
-PORT="${PORT:-8001}"
+PORT="${PORT:-8000}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-gs://openpi-assets/checkpoints/pi05_droid_jointpos}"
 PYTHON_BIN="${PYTHON_BIN:-$REPO/.venv/bin/python}"
 RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-/data/keti/snu/home/runtime/pi05-droid-jointpos-velocity}"

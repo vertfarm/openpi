@@ -22,7 +22,7 @@ class Args:
     checkpoint_dir: str = "gs://openpi-assets/checkpoints/pi05_droid_jointpos"
     config: str = "pi05_droid_jointpos_velocity"
     host: str = "0.0.0.0"
-    port: int = 8001
+    port: int = 8000
     warmup_runs: int = 2
 
 
