@@ -56,18 +56,33 @@ def prepare(bgr):
 def grab_live():
     with open("/tmp/_grab_check.py", "w", encoding="utf-8") as handle:
         handle.write(GRAB)
-    subprocess.run(["docker", "cp", "/tmp/_grab_check.py",
-                    "keti_humanoid_ros2_jazzy:/tmp/_grab_check.py"],
-                   check=True, capture_output=True)
     subprocess.run(
-        ["docker", "exec", "keti_humanoid_ros2_jazzy", "bash", "-lc",
-         "source /opt/ros/jazzy/setup.bash; export ROS_DOMAIN_ID=10 "
-         "RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; python3 /tmp/_grab_check.py"],
-        check=True, capture_output=True, text=True, timeout=180)
+        ["docker", "cp", "/tmp/_grab_check.py", "keti_humanoid_ros2_jazzy:/tmp/_grab_check.py"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "keti_humanoid_ros2_jazzy",
+            "bash",
+            "-lc",
+            "source /opt/ros/jazzy/setup.bash; export ROS_DOMAIN_ID=10 "
+            "RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; python3 /tmp/_grab_check.py",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
     frames = {}
     for c in CAMERAS:
-        subprocess.run(["docker", "cp", f"keti_humanoid_ros2_jazzy:/tmp/_check_{c}.jpg",
-                        f"/tmp/_check_{c}.jpg"], check=True, capture_output=True)
+        subprocess.run(
+            ["docker", "cp", f"keti_humanoid_ros2_jazzy:/tmp/_check_{c}.jpg", f"/tmp/_check_{c}.jpg"],
+            check=True,
+            capture_output=True,
+        )
         frames[c] = cv2.imread(f"/tmp/_check_{c}.jpg")
     return frames
 
@@ -104,9 +119,13 @@ def mat_box(bgr):
     ys, xs = np.nonzero(mask)
     if not len(xs):
         return None
-    return {"left": int(xs.min()), "right": int(xs.max()),
-            "top": int(ys.min()), "bottom": int(ys.max()),
-            "area%": round(100 * float(mask.mean()), 1)}
+    return {
+        "left": int(xs.min()),
+        "right": int(xs.max()),
+        "top": int(ys.min()),
+        "bottom": int(ys.max()),
+        "area%": round(100 * float(mask.mean()), 1),
+    }
 
 
 def main():
@@ -120,22 +139,30 @@ def main():
     print(f"{'camera':8s}{'edge':8s}{'train':>7s}{'live':>7s}{'diff':>7s}")
     for c in CAMERAS:
         t = cv2.cvtColor(prepare(train[c]), cv2.COLOR_RGB2BGR)
-        l = cv2.cvtColor(prepare(live[c]), cv2.COLOR_RGB2BGR)
-        box_t, box_l = mat_box(t), mat_box(l)
+        shot = cv2.cvtColor(prepare(live[c]), cv2.COLOR_RGB2BGR)
+        box_t, box_l = mat_box(t), mat_box(shot)
         if box_t and box_l:
             for i, key in enumerate(("left", "right", "top", "bottom", "area%")):
-                print(f"{c if not i else '':8s}{key:8s}{box_t[key]:7.1f}{box_l[key]:7.1f}"
-                      f"{box_l[key] - box_t[key]:+7.1f}")
+                print(
+                    f"{c if not i else '':8s}{key:8s}{box_t[key]:7.1f}{box_l[key]:7.1f}{box_l[key] - box_t[key]:+7.1f}"
+                )
         else:
             print(f"{c:8s}{'(빨간 매트를 찾지 못함)':8s}")
         gap = np.full((224, 6, 3), 255, np.uint8)
-        rows.append(np.hstack([
-            label(t, f"TRAIN {c}"), gap,
-            label(l, f"LIVE  {c}", (0, 255, 0)), gap,
-            label(cv2.addWeighted(t, 0.5, l, 0.5, 0), f"BLEND {c}", (0, 255, 255)),
-        ]))
-    sheet = np.vstack([r for pair in zip(rows, [np.full((6, rows[0].shape[1], 3), 255, np.uint8)] * 3)
-                       for r in pair][:-1])
+        rows.append(
+            np.hstack(
+                [
+                    label(t, f"TRAIN {c}"),
+                    gap,
+                    label(shot, f"LIVE  {c}", (0, 255, 0)),
+                    gap,
+                    label(cv2.addWeighted(t, 0.5, shot, 0.5, 0), f"BLEND {c}", (0, 255, 255)),
+                ]
+            )
+        )
+    sheet = np.vstack(
+        [r for pair in zip(rows, [np.full((6, rows[0].shape[1], 3), 255, np.uint8)] * 3) for r in pair][:-1]
+    )
     cv2.imwrite(OUT, sheet)
     print(f"\n{OUT}")
     print("BLEND에서 두 상이 겹치면 맞은 것이다. mat 경계 차이가 어느 방향으로")

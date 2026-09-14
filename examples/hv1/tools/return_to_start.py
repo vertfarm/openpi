@@ -13,17 +13,19 @@ guardian will withdraw `exclusive`.
 import argparse
 import json
 import sys
-import time
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from trajectory_msgs.msg import JointTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
 
 sys.path.insert(0, "/workspace/ros2/vla_ws/src/keti_humanoid_inference")
-from keti_humanoid_inference.core import ARM_COMMAND, ARM_STATE, named_positions
+from keti_humanoid_inference.core import ARM_COMMAND
+from keti_humanoid_inference.core import ARM_STATE
+from keti_humanoid_inference.core import named_positions
 
 RATE = 30.0
 
@@ -39,8 +41,8 @@ class Return(Node):
         self.start = None
         self.ticks = 0
         self.create_subscription(
-            JointState, "/kh/upper_body/observation/state/joint_states", self._state,
-            qos_profile_sensor_data)
+            JointState, "/kh/upper_body/observation/state/joint_states", self._state, qos_profile_sensor_data
+        )
         self.publisher = self.create_publisher(JointTrajectory, "/kh/upper_body/action/joint", 1)
         self.create_timer(1.0 / RATE, self._tick)
 
@@ -58,12 +60,13 @@ class Return(Node):
             if gap.max() > self.max_gap:
                 self.get_logger().error(
                     f"gap {gap.max():.4f} rad exceeds --max-gap {self.max_gap}; "
-                    "move the arm closer by hand or raise the ceiling deliberately")
+                    "move the arm closer by hand or raise the ceiling deliberately"
+                )
                 raise SystemExit(1)
             self.start = self.measured.copy()
             self.get_logger().info(
-                f"start gap {np.round(gap, 4).tolist()} max {gap.max():.4f} rad, "
-                f"ramping over {self.seconds:.0f}s")
+                f"start gap {np.round(gap, 4).tolist()} max {gap.max():.4f} rad, ramping over {self.seconds:.0f}s"
+            )
         self.ticks += 1
         fraction = min(1.0, self.ticks / (self.seconds * RATE))
         # Ramp the command from where the arm was to where it belongs, and do
@@ -93,9 +96,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", required=True, help="field profile holding start_q")
     parser.add_argument("--seconds", type=float, default=6.0, help="ramp duration")
-    parser.add_argument(
-        "--max-gap", type=float, default=0.35,
-        help="refuse to ramp a gap wider than this, in rad")
+    parser.add_argument("--max-gap", type=float, default=0.35, help="refuse to ramp a gap wider than this, in rad")
     args = parser.parse_args()
     with open(args.profile, encoding="utf-8") as handle:
         profile = json.load(handle)
