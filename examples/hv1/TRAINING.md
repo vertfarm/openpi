@@ -13,6 +13,75 @@ snapshot and registry on disk carries it.
 Retired campaigns keep their own records under [docs/](docs/); their modules are
 deleted and those commands no longer run.
 
+## `hv1_augmented_v1` Real2Sim2Real 경로
+
+기존 `hv1_two_track_v1` schema와 실물 LeRobot export는 그대로 둔다. 새 경로는
+실물 row의 metadata wrapper와 sim campaign의 local-prefetched tar shard를 하나의
+hash-sealed index로 묶는다. NAS path를 trainer가 직접 읽는 구성은 허용하지 않는다.
+Index는 각 tar member의 byte offset/size도 봉인하므로 2 GiB shard를 sample마다
+재스캔하지 않고 local file seek로 JSON과 JPEG 세 장을 읽는다.
+
+Real wrapper는 `hv1_augmented_real_metadata_v1` schema, `real_export_sha256`과
+record 목록을 가진 sealed JSON이다. 각 record에는 `dataset_index`, `task_id`,
+`phase`, `language`, `source_domain=real`, `render_style=real`, `synthetic=false`,
+`sampleable`, `success`/`corrected_recovery`, `quality_weight`, camera calibration,
+timestamp와 provenance hash가 있어야 한다. 기존 59개 시연은 첫 공정 위주이므로
+4공정×7-phase의 real stratum이 실제로 채워지기 전에는 M0–M4 schedule 생성이
+fail-closed한다.
+
+```bash
+python -B -m examples.hv1.pipeline augmented-wrap-real \
+  --real-export "$REAL_CAMPAIGN/export/export.json" \
+  --annotations "$AUGMENTED_ROOT/real_annotations.json" \
+  --output "$AUGMENTED_ROOT/real_metadata.json"
+
+python -B -m examples.hv1.pipeline augmented-index \
+  --real-export "$REAL_CAMPAIGN/export/export.json" \
+  --real-metadata "$AUGMENTED_ROOT/real_metadata.json" \
+  --sim-campaign "$SIM_CAMPAIGN" \
+  --output "$AUGMENTED_ROOT/index.json" \
+  --allow-synthetic
+
+python -B -m examples.hv1.pipeline augmented-status \
+  --index "$AUGMENTED_ROOT/index.json" --allow-synthetic
+
+python -B -m examples.hv1.pipeline augmented-schedules \
+  --index "$AUGMENTED_ROOT/index.json" \
+  --output-dir "$AUGMENTED_ROOT/schedules" \
+  --stage screen --allow-synthetic
+python -B -m examples.hv1.pipeline augmented-schedules \
+  --index "$AUGMENTED_ROOT/index.json" \
+  --output-dir "$AUGMENTED_ROOT/schedules" \
+  --stage confirm --allow-synthetic
+```
+
+Screening은 M0–M4 각각 seed 42, 500 updates다. 확정 단계는 M0/M3/M4 각각
+seed 42/43/44, 2,000 updates다. Batch size는 2이며 각 run은 자기 schedule의
+정확한 mixture에서 normalization을 먼저 계산한다.
+
+```bash
+python -B -m examples.hv1.pipeline_train \
+  --augmented-root "$AUGMENTED_ROOT" --experiment M4 \
+  --stage screen --seed 42 --stats-only --allow-synthetic
+
+python -B -m examples.hv1.pipeline_train \
+  --augmented-root "$AUGMENTED_ROOT" --experiment M4 \
+  --stage screen --seed 42 \
+  --deadline 2026-09-21T12:00:00+09:00 \
+  --allow-synthetic --allow-gpu-run
+```
+
+`--allow-synthetic`은 index, schedule, statistics와 training 네 단계 모두에 필요하다.
+Schedule은 매 100 sample에서 task 4종을 25개씩 배정한다. M4는 real 40,
+sim_physics 40, sim_kinematic 20이며 sim 내부 render는 RTX/3DGS/Cosmos
+30/18/12, pair-group은 전체 20개다. Kinematic은 reach, pre-grasp, transport에만
+들어간다. Loader는 schedule cursor를 optimizer checkpoint와 함께 검증하므로
+`--resume`이 다른 index, schedule 또는 normalization에 붙을 수 없다.
+
+M0–M4 snapshot은 자동으로 실기 registry에 들어가지 않는다. 고정 sim nominal,
+geometry holdout, task별 성공률과 visual counterfactual sensitivity 평가가 별도로
+구현·통과된 뒤 기존 `SHADOW_ONLY` 등록 절차로 넘겨야 한다.
+
 ## The two tracks
 
 This campaign trains two independent policies from the official `pi05_base`:

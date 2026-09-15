@@ -153,3 +153,105 @@ def configure(campaign, recipe):
         policy_metadata=metadata,
     )
     return config, export
+
+
+def configure_augmented(root, recipe):
+    """Build the same π0.5 policy with a hash-bound real+sim data contract."""
+    root = Path(root).resolve()
+    index_path = root / "index.json"
+    index = pipeline.load_augmented_index(index_path, allow_synthetic=True)
+    expected_recipe = pipeline.augmented_recipe(recipe["model"], recipe["stage"], recipe["seed"])
+    if recipe != expected_recipe:
+        raise ContractError("recipe differs from the approved augmented plan")
+    schedule_path = root / "schedules" / f"{recipe['name']}.json"
+    schedule = pipeline.checked(schedule_path)
+    expected_schedule = pipeline.augmented_schedule(
+        index_path,
+        recipe["model"],
+        recipe["steps"] * recipe["batch_size"],
+        recipe["seed"],
+        allow_synthetic=True,
+    )
+    expected_schedule = pipeline.sealed(
+        {key: value for key, value in expected_schedule.items() if key != "sha256"}
+        | {"recipe": recipe, "index_sha256": index["sha256"]}
+    )
+    if schedule != expected_schedule:
+        raise ContractError("augmented schedule differs from the approved recipe/index")
+
+    real_export_path = Path(index["real_export"]["export_manifest_path"])
+    export = read_json(real_export_path)
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    config, _ = make_config(real_export_path, root.parent, recipe["name"], steps=recipe["steps"])
+
+    from openpi.training.config import AssetsConfig
+    from openpi.training.optimizer import CosineDecaySchedule
+    from openpi.training.weight_loaders import CheckpointWeightLoader
+
+    asset_id = f"hv1_augmented_{recipe['name'].lower()}_{schedule['sha256'][:8]}"
+    asset_root = root / "assets" / asset_id
+    stats_path = asset_root / "norm_stats.json"
+    provenance = pipeline.checked(asset_root / "provenance.json")
+    if (
+        provenance.get("schema") != pipeline.AUGMENTED_SCHEMA
+        or provenance.get("index_sha256") != index["sha256"]
+        or provenance.get("schedule_sha256") != schedule["sha256"]
+        or provenance.get("recipe") != recipe
+        or provenance.get("norm_stats_sha256") != file_hash(stats_path)
+    ):
+        raise ContractError("augmented normalization identity mismatch")
+    metadata = dict(
+        config.policy_metadata,
+        campaign_schema=pipeline.AUGMENTED_SCHEMA,
+        profile=index["profile"],
+        recipe=recipe,
+        recipe_sha256=digest(recipe),
+        augmented_index_sha256=index["sha256"],
+        augmented_schedule_sha256=schedule["sha256"],
+        norm_stats_sha256=file_hash(stats_path),
+        normalization_asset_id=asset_id,
+        source_mix=recipe["mix"]["source"],
+        render_mix=recipe["mix"]["render"],
+        pair_fraction=recipe["mix"]["pair_fraction"],
+        initialization=recipe["initialization"],
+        synthetic=True,
+        robot_motion_authorized=False,
+        export_roots={"real": index["real_export"]["root"], "sim": index["sim_campaign_root"]},
+        implementation_sha256={
+            name: file_hash(Path(__file__).with_name(name))
+            for name in (
+                "artifacts.py",
+                "checkpoints.py",
+                "native.py",
+                "transforms.py",
+                "openpi_run.py",
+                "pipeline.py",
+                "pipeline_config.py",
+                "pipeline_train.py",
+            )
+        },
+    )
+    config = dataclasses.replace(
+        config,
+        data=dataclasses.replace(
+            config.data,
+            assets=AssetsConfig(assets_dir=str(root / "assets"), asset_id=asset_id),
+        ),
+        weight_loader=CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=config.model.get_freeze_filter(),
+        batch_size=recipe["batch_size"],
+        seed=recipe["seed"],
+        num_workers=0,
+        ema_decay=None,
+        checkpoint_base_dir=str(root / "restarts"),
+        keep_period=None,
+        lr_schedule=CosineDecaySchedule(
+            warmup_steps=recipe["warmup_steps"],
+            peak_lr=recipe["peak_lr"],
+            decay_steps=recipe["decay_steps"],
+            decay_lr=recipe["decay_lr"],
+        ),
+        policy_metadata=metadata,
+    )
+    return config, index, schedule

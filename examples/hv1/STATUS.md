@@ -1,6 +1,6 @@
 # HV1 현재 상태
 
-최종 갱신 2026-09-14 · 규약은 [AGENTS.md](../../AGENTS.md)
+최종 갱신 2026-09-15 · 규약은 [AGENTS.md](../../AGENTS.md)
 
 이 파일은 **지금 사실인 것**만 담는다. 매 세션 끝에 덮어쓴다.
 
@@ -37,14 +37,23 @@ V3(둘의 결합). V2는 그룹별로 gap 부호가 갈려 한때 "일부 반응
 지목돼 있던 것이다. 목표치: `|d15|` 대 거리 상관 `|r| > 0.6`,
 초기 접근 방향 코사인 중앙 **≤ 0.3** (현재 0.89~0.99).
 
+그 수집 재설계를 받는 `hv1_augmented_v1` 경로는 구현됐다. 기존 실물 LeRobot
+export를 metadata wrapper로 유지하면서 hash-verified sim shard를 local hot cache에서
+읽고, M0–M4 screening과 M0/M3/M4 3-seed 확정 학습의 source/task/phase/render/pair
+mixture를 고정한다. Schedule별 normalization, synthetic opt-in과 exact resume
+identity도 연결돼 있다. 현재 실제 sim anchor, normalization asset과 증강 checkpoint는
+0개이므로 이 구현은 정책 성능 개선의 실행 증거가 아니다.
+
 ## 코드 상태
 
 | 항목 | 값 |
 |---|---|
 | canonical 브랜치 | `codex/hv1-vla-workflow-20260909` (remote `origin`) |
+| 증강 구현 worktree | `codex/hv1-augmented-v1-20260915` (local, 미실행) |
 | 회귀 테스트 | 182개 (`.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 15초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
-| 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
+| 진입점 | 10모듈 / 33명령 (기존 28 + pipeline의 증강 5). `test_artifacts.py`가 모듈 표면을 고정 |
+| 증강 source-only 검사 | 신규 계약 테스트 9/9 + 기존 구조 테스트 27/27 통과. Windows 기본 Python에는 `h5py`, 기존 uv Python link가 없어 전체 182개 재실행은 대기 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
 | repo ↔ `vla_ws` 사본 | `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
 | `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |

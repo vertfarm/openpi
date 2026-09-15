@@ -32,6 +32,14 @@ KETI 휴머노이드 HV1의 오른팔로 은색 실린더를 집어 트레이에
 시도 셋(손실 가중, state 노이즈, 둘의 결합)은 실측으로 실패 확정됐다. **남은 길은 수집
 재설계다** — 물체 위치가 *언제 멈추는지*만이 아니라 *어디로 가는지*를 바꾸도록.
 
+2026-09-15에 이 수집 재설계를 받는 `hv1_augmented_v1` 경로를 기존
+`pipeline.py`, `pipeline_config.py`, `pipeline_train.py`, `transforms.py` 안에
+구현했다. 실물 LeRobot export는 바꾸지 않고 metadata wrapper로 감싸며, local hot
+cache의 hash-verified sim tar shard와 합친다. M0–M4의 500-update screening과
+M0/M3/M4 3-seed 2,000-update 확정 스케줄, task/phase/source/render/counterfactual
+비율, schedule별 normalization과 exact resume cursor를 코드가 강제한다. 실제 sim
+shard, normalization, 학습 checkpoint는 아직 생성하지 않았다.
+
 ## 실행 가능한 것 전부
 
 실행 가능한 모듈은 **10개뿐이며 아래가 전부다.** 나머지 파일은 라이브러리다
@@ -42,8 +50,10 @@ KETI 휴머노이드 HV1의 오른팔로 은색 실린더를 집어 트레이에
 | 할 일 | 실행 모듈 | 상세 |
 |---|---|---|
 | 세션 검수·고정 manifest·export·통계 | `examples.hv1.pipeline` | [TRAINING.md](TRAINING.md) |
+| Real2Sim2Real index·M0–M4 스케줄 | `examples.hv1.pipeline` | [TRAINING.md](TRAINING.md)의 `hv1_augmented_v1` |
 | smoke → 트랙 학습·평가 순차 실행 / 절제 실험 | `examples.hv1.pipeline_run` | 같은 문서 |
 | 개별 학습 | `examples.hv1.pipeline_train` | 복구·개별 검증용 |
+| 증강 mixture 통계·π0.5 학습 | `examples.hv1.pipeline_train` | `--augmented-root --allow-synthetic` |
 | 평가·후보 등록 / **교차 모달 점검** | `examples.hv1.pipeline_eval` | 같은 문서의 「카메라를 쓰는가」 |
 | 검수된 모델의 loopback HTTP 추론 | `examples.hv1.deploy_server` | [DEPLOYMENT.md](DEPLOYMENT.md) |
 
