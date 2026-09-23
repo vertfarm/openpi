@@ -9,6 +9,9 @@ from .workflow import validate_profile
 
 CAMERA_KEYS = {"head": "base_0_rgb", "hand_l": "left_wrist_0_rgb", "hand_r": "right_wrist_0_rgb"}
 AUGMENTED_INTERFACE = "hv1_augmented_v1"
+# Task ids a sample may carry. Which of them a campaign actually generates is
+# the sim profile's decision and is enforced where the schedule is built; this
+# is the vocabulary, so a v2 task does not have to round-trip through here.
 AUGMENTED_TASKS = {
     "cylinder_table_to_tray",
     "cylinder_tray_to_table",
@@ -19,6 +22,12 @@ AUGMENTED_PHASES = {"reach", "pre_grasp", "grasp", "lift", "transport", "place",
 AUGMENTED_SOURCES = {"real", "sim_physics", "sim_kinematic"}
 AUGMENTED_STYLES = {"real", "rtx", "3dgs", "cosmos"}
 KINEMATIC_PHASES = {"reach", "pre_grasp", "transport"}
+# Real episodes derive grasp intent from the fixed operator protocol, so it is a
+# binary step in [0, 1]. A simulated anchor emitting a continuous or negative
+# value would make channel 7 identify the sample's domain, which is exactly the
+# shortcut the sim mixture exists to remove.
+GRASP_INTENT_INDEX = 7
+GRASP_INTENT_RANGE = (0.0, 1.0)
 
 
 def validate_augmented_sample(data, *, allow_synthetic=False):
@@ -32,6 +41,13 @@ def validate_augmented_sample(data, *, allow_synthetic=False):
             raise ContractError("augmented sample must carry state[15] and actions[15,8]")
         if not np.isfinite(state).all() or not np.isfinite(actions).all():
             raise ContractError("augmented state/action contains NaN or Inf")
+        low, high = GRASP_INTENT_RANGE
+        intent = actions[:, GRASP_INTENT_INDEX]
+        if intent.min() < low or intent.max() > high:
+            raise ContractError(
+                f"augmented grasp intent must lie in [{low}, {high}]; real episodes "
+                "encode it as a binary step and a sim anchor must match"
+            )
         if set(data["images"]) != set(CAMERA_KEYS):
             raise ContractError("augmented sample requires all three cameras")
         if data["task_id"] not in AUGMENTED_TASKS or data["phase"] not in AUGMENTED_PHASES:
@@ -52,6 +68,11 @@ def validate_augmented_sample(data, *, allow_synthetic=False):
             raise ContractError("sim_kinematic contact phase is forbidden")
         if not isinstance(data["language"], str) or not data["language"].strip():
             raise ContractError("augmented language prompt is empty")
+        # Reachable workspace, IK branches and the pose hull move with the
+        # hardware, so a sample has to say which arm produced it. The index
+        # refuses to mix revisions without an explicit override.
+        if not isinstance(data["embodiment_revision"], str) or not data["embodiment_revision"]:
+            raise ContractError("augmented sample is missing embodiment_revision")
         if type(data["sampleable"]) is not bool or not np.isfinite(float(data["quality_weight"])):
             raise ContractError("invalid sampleability or quality weight")
         if data["quality_weight"] < 0:

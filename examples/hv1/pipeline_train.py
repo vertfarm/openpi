@@ -15,6 +15,7 @@ import zlib
 
 import numpy as np
 
+from . import augmented
 from . import pipeline
 from . import native
 from .artifacts import GIB
@@ -104,7 +105,7 @@ class AugmentedDataset:
     def __init__(self, index_path, model, *, allow_synthetic=False, real_dataset=None):
         if not allow_synthetic:
             raise ContractError("augmented dataset requires explicit --allow-synthetic")
-        self.index = pipeline.load_augmented_index(index_path, allow_synthetic=True)
+        self.index = augmented.load_augmented_index(index_path, allow_synthetic=True)
         self.sim_root = Path(self.index["sim_campaign_root"]).resolve()
         if real_dataset is None:
             from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -174,20 +175,25 @@ class AugmentedDataset:
         else:
             raise ContractError("unknown augmented data reference")
         validate_augmented_sample(sample, allow_synthetic=True)
+        # Real rows arrive from LeRobot as tensors and sim rows as JSON lists.
+        # Both go into the same batch, so normalise here: collating a list of
+        # floats does not produce the same thing as collating an array.
         return {
-            "observation.state": sample["state"],
+            "observation.state": np.asarray(sample["state"], dtype=np.float32),
             **{
-                f"observation.images.{camera}": sample["images"][camera]
+                f"observation.images.{camera}": np.asarray(
+                    sample["images"][camera], dtype=np.uint8
+                )
                 for camera in native.CAMERAS
             },
-            "action": sample["actions"],
+            "action": np.asarray(sample["actions"], dtype=np.float32),
             "prompt": sample["language"],
         }
 
 
 class AugmentedScheduleSampler:
     def __init__(self, schedule, index_sha256, consumed=0):
-        if schedule.get("schema") != pipeline.AUGMENTED_SCHEMA:
+        if schedule.get("schema") != augmented.AUGMENTED_SCHEMA:
             raise ContractError("unsupported augmented schedule")
         if schedule.get("index_sha256") != index_sha256:
             raise ContractError("schedule/index identity mismatch")
@@ -230,9 +236,10 @@ def compute_augmented_statistics(root, model, stage, seed, *, allow_synthetic=Fa
     if not allow_synthetic:
         raise ContractError("augmented statistics require explicit --allow-synthetic")
     root = Path(root).resolve()
-    recipe = pipeline.augmented_recipe(model, stage, seed)
     index_path = root / "index.json"
-    index = pipeline.load_augmented_index(index_path, allow_synthetic=True)
+    index = augmented.load_augmented_index(index_path, allow_synthetic=True)
+    profile = augmented.load_campaign_profile(index["sim_campaign_root"])
+    recipe = augmented.augmented_recipe(model, stage, seed, profile)
     schedule = pipeline.checked(root / "schedules" / f"{recipe['name']}.json")
     if schedule.get("recipe") != recipe or schedule.get("index_sha256") != index["sha256"]:
         raise ContractError("augmented statistics schedule lineage mismatch")
@@ -261,12 +268,12 @@ def compute_augmented_statistics(root, model, stage, seed, *, allow_synthetic=Fa
     normalize.save(asset_root, {key: value.get_statistics() for key, value in running.items()})
     provenance = sealed(
         {
-            "schema": pipeline.AUGMENTED_SCHEMA,
+            "schema": augmented.AUGMENTED_SCHEMA,
             "index_sha256": index["sha256"],
             "schedule_sha256": schedule["sha256"],
             "recipe": recipe,
             "scheduled_samples": len(schedule["records"]),
-            "coverage": pipeline.augmented_coverage(schedule, len(schedule["records"])),
+            "coverage": augmented.augmented_coverage(schedule, len(schedule["records"])),
             "normalization_scope": "exact_scheduled_training_mixture",
             "norm_stats_sha256": file_hash(asset_root / "norm_stats.json"),
             "robot_motion_authorized": False,
@@ -488,8 +495,9 @@ def train_augmented(root, model, stage, seed, deadline, *, resume=False, allow_s
     if not allow_synthetic:
         raise ContractError("augmented training requires explicit --allow-synthetic")
     root = Path(root).resolve()
-    recipe = pipeline.augmented_recipe(model, stage, seed)
-    index = pipeline.load_augmented_index(root / "index.json", allow_synthetic=True)
+    index = augmented.load_augmented_index(root / "index.json", allow_synthetic=True)
+    profile = augmented.load_campaign_profile(index["sim_campaign_root"])
+    recipe = augmented.augmented_recipe(model, stage, seed, profile)
     schedule = pipeline.checked(root / "schedules" / f"{recipe['name']}.json")
     if schedule.get("recipe") != recipe or schedule.get("index_sha256") != index["sha256"]:
         raise ContractError("augmented run schedule lineage mismatch")
@@ -624,7 +632,7 @@ def train_augmented(root, model, stage, seed, deadline, *, resume=False, allow_s
                         "step": step,
                         "target": recipe["steps"],
                         "metrics": metrics,
-                        "coverage": pipeline.augmented_coverage(schedule, step * config.batch_size),
+                        "coverage": augmented.augmented_coverage(schedule, step * config.batch_size),
                         "seconds_per_update": float(np.median(durations[-30:])),
                         "initialization": recipe["initialization"],
                         "robot_commands_sent": 0,
@@ -669,7 +677,7 @@ def train_augmented(root, model, stage, seed, deadline, *, resume=False, allow_s
                     for snapshot in recipe["snapshots"]
                     if snapshot <= step
                 ],
-                "coverage": pipeline.augmented_coverage(schedule, step * config.batch_size),
+                "coverage": augmented.augmented_coverage(schedule, step * config.batch_size),
                 "identity": identity,
                 "restart_path": restart_path,
                 "exact_optimizer_resume_available": restart_path is not None,
@@ -695,7 +703,7 @@ def main():
             *pipeline.TRACKS,
             *pipeline.FILTER_FINETUNES,
             *pipeline.ABLATIONS,
-            *pipeline.AUGMENTED_MODELS,
+            *augmented.MODEL_NAMESPACE,
         ],
         required=True,
     )
@@ -708,8 +716,8 @@ def main():
     parser.add_argument("--allow-gpu-run", action="store_true")
     args = parser.parse_args()
     if args.augmented_root:
-        if args.experiment not in pipeline.AUGMENTED_MODELS or args.stage is None:
-            parser.error("--augmented-root requires M0--M4 --experiment and --stage")
+        if args.experiment not in augmented.MODEL_NAMESPACE or args.stage is None:
+            parser.error("--augmented-root requires an M* --experiment and --stage")
         if args.stats_only:
             result = compute_augmented_statistics(
                 args.augmented_root,
@@ -731,7 +739,7 @@ def main():
                 allow_synthetic=args.allow_synthetic,
             )
     else:
-        if args.experiment in pipeline.AUGMENTED_MODELS or args.stage or args.stats_only or args.allow_synthetic:
+        if args.experiment in augmented.MODEL_NAMESPACE or args.stage or args.stats_only or args.allow_synthetic:
             parser.error("augmented options require --augmented-root")
         if not args.allow_gpu_run or args.deadline is None:
             parser.error("training requires --deadline and explicit --allow-gpu-run")

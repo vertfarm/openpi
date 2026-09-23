@@ -6,6 +6,7 @@ import dataclasses
 import os
 from pathlib import Path
 
+from . import augmented
 from . import pipeline
 from .artifacts import ContractError
 from .artifacts import digest
@@ -159,13 +160,16 @@ def configure_augmented(root, recipe):
     """Build the same π0.5 policy with a hash-bound real+sim data contract."""
     root = Path(root).resolve()
     index_path = root / "index.json"
-    index = pipeline.load_augmented_index(index_path, allow_synthetic=True)
-    expected_recipe = pipeline.augmented_recipe(recipe["model"], recipe["stage"], recipe["seed"])
+    index = augmented.load_augmented_index(index_path, allow_synthetic=True)
+    profile = augmented.load_campaign_profile(index["sim_campaign_root"])
+    expected_recipe = augmented.augmented_recipe(
+        recipe["model"], recipe["stage"], recipe["seed"], profile
+    )
     if recipe != expected_recipe:
         raise ContractError("recipe differs from the approved augmented plan")
     schedule_path = root / "schedules" / f"{recipe['name']}.json"
     schedule = pipeline.checked(schedule_path)
-    expected_schedule = pipeline.augmented_schedule(
+    expected_schedule = augmented.augmented_schedule(
         index_path,
         recipe["model"],
         recipe["steps"] * recipe["batch_size"],
@@ -194,7 +198,7 @@ def configure_augmented(root, recipe):
     stats_path = asset_root / "norm_stats.json"
     provenance = pipeline.checked(asset_root / "provenance.json")
     if (
-        provenance.get("schema") != pipeline.AUGMENTED_SCHEMA
+        provenance.get("schema") != augmented.AUGMENTED_SCHEMA
         or provenance.get("index_sha256") != index["sha256"]
         or provenance.get("schedule_sha256") != schedule["sha256"]
         or provenance.get("recipe") != recipe
@@ -203,7 +207,7 @@ def configure_augmented(root, recipe):
         raise ContractError("augmented normalization identity mismatch")
     metadata = dict(
         config.policy_metadata,
-        campaign_schema=pipeline.AUGMENTED_SCHEMA,
+        campaign_schema=augmented.AUGMENTED_SCHEMA,
         profile=index["profile"],
         recipe=recipe,
         recipe_sha256=digest(recipe),

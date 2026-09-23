@@ -169,7 +169,14 @@ def test_shared_snapshot_requires_complete_evidence(tmp_path, field):
 # only reason the surface grew to 33 commands across 12 modules by 2026-09-11 was
 # that two retired generations kept their entry points after their callers were
 # gone. `native` and `openpi_run` became libraries when theirs were removed.
-CAMPAIGN_CLIS = ("pipeline", "pipeline_run", "pipeline_train", "pipeline_eval", "deploy_server")
+CAMPAIGN_CLIS = (
+    "pipeline",
+    "augmented",
+    "pipeline_run",
+    "pipeline_train",
+    "pipeline_eval",
+    "deploy_server",
+)
 OPERATOR_CLIS = ("deploy_smoke", "shadow_eval", "source_contract", "verify_export")
 SYNTHETIC_CLIS = ("cli",)
 LIBRARIES_ONLY = ("artifacts", "checkpoints", "metrics", "native", "openpi_run", "pipeline_config", "transforms")

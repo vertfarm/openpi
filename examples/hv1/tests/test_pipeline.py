@@ -317,7 +317,13 @@ def fake_dataset(value):
     """The LeRobot row shape `_observation` reads, keyed by global frame index."""
     return {
         "observation.state": np.full(15, value, dtype=np.float32),
-        **{f"observation.images.{camera}": np.full((4, 4, 3), value, dtype=np.uint8) for camera in CAMERAS},
+        # Frame indices run past 255; numpy 2 refuses the silent wrap that
+        # older releases applied, so wrap explicitly. Only the state carries
+        # the index the assertions read.
+        **{
+            f"observation.images.{camera}": np.full((4, 4, 3), value % 256, dtype=np.uint8)
+            for camera in CAMERAS
+        },
     }
 
 
@@ -554,7 +560,24 @@ def test_the_registry_path_is_checked_before_any_model_is_loaded(tmp_path):
         )
 
 
+def _symlinks_available(tmp_path):
+    probe = tmp_path / "symlink-probe"
+    target = tmp_path / "symlink-target"
+    target.write_bytes(b"")
+    try:
+        probe.symlink_to(target)
+    except (OSError, NotImplementedError):
+        return False
+    probe.unlink()
+    return True
+
+
 def test_cleanup_removes_only_generated_state_and_journals_it(tmp_path):
+    # The cleanup contract is about refusing to follow a link out of the
+    # campaign, so the test needs real symlinks. Unprivileged Windows cannot
+    # create them; the GPU hosts that run this campaign can.
+    if not _symlinks_available(tmp_path):
+        pytest.skip("this host cannot create symlinks")
     campaign = tmp_path / "campaign"
     evidence = campaign / "evaluations/TODAY30_001000.json"
     write_new_json(evidence, dict(complete=True, gpu_reload_pass=True))
