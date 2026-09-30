@@ -11,12 +11,14 @@ KETI 휴머노이드 HV1의 오른팔로 은색 실린더를 집어 트레이에
                     ROS shadow  /  감독하 실기 executor
 ```
 
+최종 갱신 2026-09-30 · 담당 서용혁(VLA) · ROS·텔레옵·손 드라이버는 문종술 선임
+
 ## 처음 오셨다면 — 이 순서로 15분
 
 1. **[STATUS.md](STATUS.md)의 「한 줄 요약」과 「확정된 사실」** — 지금 무엇이 사실이고
    무엇을 다시 재지 말아야 하는지. 이 프로젝트에서 가장 값진 문서다.
 2. **[../../AGENTS.md](../../AGENTS.md)** — 건드리면 안 되는 것들. 짧다.
-3. 아래 「지금 상태를 한 문단으로」와 「실행 가능한 것 전부」.
+3. 아래 「지금 상태를 한 문단으로」, 「운영 환경」, 「로봇과의 인터페이스」, 「실행 가능한 것 전부」.
 4. 실제로 뭔가 돌릴 때 [TRAINING.md](TRAINING.md)(데이터→모델) 또는
    [DEPLOYMENT.md](DEPLOYMENT.md)(모델→로봇).
 
@@ -31,6 +33,69 @@ KETI 휴머노이드 HV1의 오른팔로 은색 실린더를 집어 트레이에
 0.89~0.99로 같아서, 팔 자세만 보는 것이 학습 목표상 최적이었다. 코드로 고치려는
 시도 셋(손실 가중, state 노이즈, 둘의 결합)은 실측으로 실패 확정됐다. **남은 길은 수집
 재설계다** — 물체 위치가 *언제 멈추는지*만이 아니라 *어디로 가는지*를 바꾸도록.
+
+### 다음 방향 (2026-10)
+
+정답이 하나로 정해져 있지 않다. 현장 상황에 맞춰 고른다.
+
+- **데이터 v2 먼저.** 초기 접근 방향이 갈리는 시연(목표: 접근 방향 코사인 중앙 ≤ 0.3,
+  `|d15|` 대 거리 상관 `|r| > 0.6`)을 모으고, 같은 레시피로 다시 학습한다. 데이터만으로
+  시각 사용이 살아날 가능성이 가장 크고 비용도 가장 작다.
+- **모델 교체는 그다음 선택지.** 데이터 v2로도 교차 모달 점검이 움직이지 않으면
+  GR00T 계열 등 다른 VLA를 같은 데이터·같은 점검으로 비교한다. 이때도 `CONTRACT`
+  (state 15 / action 8 / 카메라 3)와 ROS 쪽 `ros/keti_humanoid_inference`는 그대로 두고
+  서버만 바꾸는 것이 기본이다.
+- 판단 기준은 shadow 지표가 아니라 `pipeline_eval`의 **교차 모달 점검**과 감독하 실기 결과다.
+
+## 운영 환경 (2026-09-30 기준)
+
+| 항목 | 값 |
+|---|---|
+| 현장 운영 PC | **RTX 5090** (2026-09-14에 RTX PRO 6000에서 이전). 수집·학습·추론·ROS 컨테이너 모두 여기 |
+| RTX PRO 6000 | 보관·대형 학습 후보. 체크포인트와 `pi05_base`는 5090 `~/workspace/hv1-archive/`로 반출 완료(SHA-256 대조) |
+| ROS 컨테이너 | `keti_humanoid_ros2_jazzy` (이미지 `keti-humanoid:jazzy`), 관리 문종술 선임 |
+| DDS | `ROS_DOMAIN_ID=101`, `rmw_cyclonedds_cpp`, 유선 인터페이스 고정. **단일 출처는 제어 쪽 `/workspace/.entrypoint.sh`** — 값을 코드나 문서에 하드코딩하지 않는다 |
+| 주의 | 컨테이너 기본 env는 `ROS_DOMAIN_ID=30`이다. `docker exec` 비대화형 셸은 반드시 `source /workspace/.entrypoint.sh`를 먼저 한다 |
+
+```bash
+# ROS 컨테이너 안에서 VLA 노드를 띄우기 전 확인
+source /workspace/.entrypoint.sh
+source /workspace/ros2/vla_ws/install/setup.bash
+test "$RMW_IMPLEMENTATION" = rmw_cyclonedds_cpp && echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID"   # 101
+```
+
+## 로봇과의 인터페이스 한눈에
+
+VLA는 **두 프로세스**다. 추론 서버(ML venv, GPU)에는 로봇 API가 없고, ROS 노드는 ML 스택에 의존하지 않는다.
+
+```text
+ROS topics ──► vla_client 노드 ──HTTP JSON, 127.0.0.1:8000──► deploy_server (π0.5)
+               (ros/keti_humanoid_inference)   ◄── actions 15×8 ──┘
+   shadow: /hv1_vla/shadow/candidate 만 발행
+   live  : LiveGate 통과 시 /kh/upper_body/action/joint + /kdex_3f/right/grasp·set_open
+```
+
+| 방향 | 대상 | 형태 |
+|---|---|---|
+| 입력 | `/kh/upper_body/observation/state/joint_states` | 오른팔 7축, 이름으로 추출 |
+| 입력 | `/kdex_3f/right/rel_angle/joint_state` | 오른손 8축 |
+| 입력 | `/kh/upper_body/head/color/image_raw/compressed`, `/kdex_3f/{left,right}/camera/image_raw/compressed` | JPEG 3장, 서버에서 640×480 → 224 pad |
+| 출력 | `/kh/upper_body/action/joint` | `JointTrajectory`, `arm_r_joint1..7`, 점 1개 @ 30 Hz |
+| 출력 | `/kdex_3f/right/grasp` (action), `/kdex_3f/right/set_open` (srv) | 그리퍼 이벤트(닫기 1회 → 열기 1회) |
+| 서버 | `GET /health`, `POST /infer` | 계약·스냅샷·`core.py` 해시 대조 → state 15 + JPEG ×3 → actions (15, 8) |
+
+- QoS는 BEST_EFFORT. `command/`·`_mirror` topic에는 **절대 발행하지 않는다.**
+- 실행: 30 Hz 격자, 응답당 앞 3개 실행(약 10 Hz 재계획), 청크 앙상블 `exp(−0.3·age)`,
+  intent 0.7/0.3 문턱, 위반 시 `hold_here` 후 정지, pilot 45초 상한.
+- 계약은 `ros/keti_humanoid_inference/keti_humanoid_inference/core.py`의 `CONTRACT`, HTTP 처리·오류 코드는 `deploy_server.py`, 실행 절차는 [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## upstream OpenPI 대비
+
+`Physical-Intelligence/openpi` → `keti-ai/openpi` → `vertfarm/openpi` 포크(merge base `2b1f377`).
+HV1 작업은 **전부 `examples/hv1/`에 격리**돼 있고 `src/openpi`는 수정하지 않는다
+(`src/` 수정 2개 파일은 별개인 DROID joint-position 서빙 작업이다). OpenPI는
+`pi05_base` 가중치·학습 루프·정책 로딩을 라이브러리로만 쓴다. upstream 갱신을 병합할 때
+충돌면은 `examples/hv1/`이 import하는 OpenPI API뿐이다.
 
 ## 실행 가능한 것 전부
 
