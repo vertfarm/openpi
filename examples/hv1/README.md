@@ -178,7 +178,7 @@ ROS 패키지는 컨테이너에서 독립 설치되므로 ML 공통 모듈에 �
 cd ~/workspace/openpi-hv1
 JAX_PLATFORMS=cpu .venv/bin/python -B -m pytest examples/hv1/tests -q -p no:cacheprovider
 .venv/bin/python -B -m ruff check examples/hv1 --select F,E4,E7,E9,I
-.venv/bin/python -B -m ruff format --check examples/hv1
+.venv/bin/python -B -m ruff format --check examples/hv1 --exclude "examples/hv1/ros/**"
 ```
 
 CPU 테스트 통과는 새 데이터 GPU 학습이나 실기 성공의 증거가 아니다.

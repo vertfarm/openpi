@@ -1,6 +1,6 @@
 # HV1 현재 상태
 
-최종 갱신 2026-09-14 · 규약은 [AGENTS.md](../../AGENTS.md)
+최종 갱신 2026-09-30 · 규약은 [AGENTS.md](../../AGENTS.md)
 
 이 파일은 **지금 사실인 것**만 담는다. 매 세션 끝에 덮어쓴다.
 
@@ -37,17 +37,30 @@ V3(둘의 결합). V2는 그룹별로 gap 부호가 갈려 한때 "일부 반응
 지목돼 있던 것이다. 목표치: `|d15|` 대 거리 상관 `|r| > 0.6`,
 초기 접근 방향 코사인 중앙 **≤ 0.3** (현재 0.89~0.99).
 
+## 2026-09-30 현장 기준 — 09-14 이후 바뀐 것
+
+| 항목 | 지금 |
+|---|---|
+| 운영 PC | **RTX 5090**(09-14 이전 완료). 로봇 LAN 유선에 붙어 있고 MQTT 브로커 1883에 닿는다 |
+| RTX PRO 6000 | 보관·대형 학습 후보. 체크포인트 11개와 `pi05_base`를 5090 `~/workspace/hv1-archive/tier_d_from_6000_20260930/`로 반출(SHA-256 199/199). 미커밋 변경·stash·runtime은 `field6000_residual_20260930/` |
+| 제어 스택 | `keti_humanoid_ros2` `a6daf65`(문종술 선임). **`ROS_DOMAIN_ID=101` + CycloneDDS(유선 고정)**. 이전 문서의 domain 10은 폐기 |
+| DDS 설정 출처 | 제어 쪽 `/workspace/.entrypoint.sh` 하나. 컨테이너 기본 env는 domain 30이라 `docker exec`는 먼저 source해야 한다(`2c4e358`에서 `DEPLOYMENT.md`·`tools/check_camera_input.py` 정렬) |
+| 손 | 드라이버 `kdex_3f` `076a446`은 현장에만 있고 GitHub에 없다(푸시 요청 중). 손 속도 4.5·가속도 10 |
+| 관절 한계 | 필드 프로파일 ±1.5708은 **CAD 값이며 실측한 적 없다**(아래 프로파일 표). controller `limits_verified`는 `false`가 실효값이고 servo streaming에는 적용되지 않는다 |
+| 이전 후 실기 | 5090에서 guardian·`vla_client` live 실행 기록은 없다. 마지막 실기는 09-11 `rollout_013` |
+| 조회 시점 topic | 09-30 조회 때 `joint_states`만 떠 있었고 손·카메라 topic은 없었다. 실행 전 3개 카메라와 `rel_angle`이 모두 뜨는지 확인한다 |
+
 ## 코드 상태
 
 | 항목 | 값 |
 |---|---|
-| canonical 브랜치 | `codex/hv1-vla-workflow-20260909` (remote `origin`) |
-| 회귀 테스트 | 182개 (`.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 15초) |
+| canonical 브랜치 | `codex/hv1-vla-workflow-20260909` (remote `origin`). 현장 5090 = GitHub |
+| 회귀 테스트 | 182개 통과(2026-09-30 5090 재확인, `.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 17초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
-| repo ↔ `vla_ws` 사본 | `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
-| `stash@{0}` | `field-20260910-pre-ff-snapshot` — `df`, `rosgraph.png` 포함. 미정리 |
+| repo ↔ `vla_ws` 사본 | 5090 `keti_humanoid_ros2/ros2/vla_ws/src`, `core.py` 해시 09-30 재확인 일치. `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
+| `stash@{0}` | 6000 체크아웃에만 있다(`field-20260910-pre-ff-snapshot`). patch로 추출해 5090 `hv1-archive/field6000_residual_20260930/`에 보관. 5090 체크아웃에는 stash 없음 |
 
 숫자는 낡는다. **지금 값은 아래로 직접 확인한다.**
 
@@ -64,6 +77,8 @@ sha256sum examples/hv1/ros/keti_humanoid_inference/keti_humanoid_inference/core.
 세 곳이 일치**해야 한다. 어긋나면 재빌드 없이 실기를 시작하지 않는다.
 
 ### 디스크 정책
+
+5090은 2026-09-30 기준 여유 1.5 TiB라 디스크 게이트는 당분간 막히지 않는다. 아래 수치는 6000 시절 기록이다.
 
 게이트는 `artifacts.py`의 `MIN_FREE` = **15 GiB**(2026-09-11 감독자 승인으로 50에서 낮춤).
 학습 1회가 그 위에 40 GiB를 예약하므로 **여유 55 GiB 미만이면 학습이 거부된다.**
@@ -303,7 +318,7 @@ registry의 `schema`가 `hv1_two_track_v1`이 아니면 스냅샷을 열기 전�
 | `max_step` | **0.041** rad | 정책 스텝의 **p99**. 실질 제한 |
 | `max_velocity` | 1.4 rad/s | `max_step ÷ 30.2ms` + 여유. 스텝이 통과한 걸 속도가 재거부하지 않게 |
 | `max_acceleration` | 50 rad/s² | 한 주기에 `max_velocity` 도달 시 46.4. 백스톱 (정책 p99 35.5) |
-| `joint_min/max` | ±1.5708 | URDF 하드웨어 한계 |
+| `joint_min/max` | ±1.5708 | URDF 값 = **CAD 자리값, 실측 아님**(2026-09-30 확인). 실측 한계가 나오면 교체 |
 | `start_q` | `[0.0711, 0.3023, 0.1041, 1.4013, 0.2629, 0.4531, 0.1898]` | 30에피소드 첫 프레임 중앙값 |
 | `start_tolerance` | `[0.06, 0.06, 0.12, 0.08, 0.08, 0.10, 0.07]` | 같은 프레임들의 산포 |
 | `max_tracking_error` | 0.15 rad | **잠정.** 움직여야 측정됨 |
@@ -323,14 +338,15 @@ registry의 `schema`가 `hv1_two_track_v1`이 아니면 스냅샷을 열기 전�
    이건 제한 rollout에서만 확인된다. rollout 중 파지 직전 팔 속도를 기록해
    위 시연 분포(직후 0.5초 최대 속도 중앙 0.013 rad/s)와 대조할 것.
 2. ~~배포 체크포인트 최종 선택~~ — TODAY30-1000 @ hold 0.1 확정.
-3. FT 스냅샷 4개 삭제 여부. 삭제 시 약 20GiB 회수. 게이트 여유가 9GiB뿐이다.
-4. `stash@{0}` 처리 — `rosgraph.png`는 문서 자산으로 보존 결정됨, `df`는 잡파일.
+3. FT 스냅샷 4개 삭제 여부. 삭제 시 약 20GiB 회수. 6000 기준 문제였고 5090(여유 1.5 TiB)에서는 급하지 않다.
+4. `stash@{0}` 처리 — `rosgraph.png`는 문서 자산으로 보존 결정됨, `df`는 잡파일. 6000에만 있고 patch 반출 완료.
 5. **state 지름길의 다음 대응** — V2/V3 결과는 아래 표와 같다. 추가 sigma sweep을
    자동 실행하지 않았으며, 수집 재설계와 함께 감독자가 다음 실험을 선택해야 한다.
 
 ### 실행 순서
 
 세 터미널이 필요하다. guardian 터미널의 Ctrl-C가 정지 손잡이다.
+ROS 쪽 터미널(2·3)은 먼저 `source /workspace/.entrypoint.sh`와 `source /workspace/ros2/vla_ws/install/setup.bash`를 하고 `ROS_DOMAIN_ID=101`인지 본다.
 
 ```
 1  deploy_server  --snapshot snapshots/TODAY30/step_001000 --registry checkpoint_registry.json
@@ -370,7 +386,12 @@ fault가 난다.
    맞추지 말 것 — 대비가 무너진다.
 
 3. **재수집 후 재학습** — 같은 명령으로 돌아간다. 판정은 teacher-forced 점수가
-   아니라 `evaluate-cross-modal`의 gap과 방향 코사인이다.
+   아니라 `evaluate-cross-modal`의 gap과 방향 코사인이다. 기존 학습은 0.089 epoch였으므로
+   새 데이터에서는 epoch 기준으로 학습량도 비교한다.
+
+4. **모델 비교는 그다음** — 새 데이터로도 교차 모달 gap이 움직이지 않으면 GR00T 계열,
+   π0/π0-FAST, 소형 VLA, ACT/Diffusion 기준선을 같은 데이터·같은 점검으로 비교한다.
+   ROS 노드와 `CONTRACT`는 그대로 두고 추론 서버만 바꾸는 것이 기본이다.
 
 ## 머신 이전 — 새 PC로 옮길 때
 
@@ -425,7 +446,8 @@ Windows를 신뢰 경계가 아닌 전송 브리지로만 사용했고, 각 홉�
 
 남은 게이트:
 
-- 새 PC에서 로봇망 MQTT가 아직 도달하지 않는다. ROS domain 10 노드, guardian,
+- ~~새 PC에서 로봇망 MQTT가 아직 도달하지 않는다.~~ 2026-09-30 해소: 5090이 로봇 LAN에 붙어 MQTT 1883에 닿고, 제어 스택은 domain 101이다. 아래 원문은 09-14 기록이다.
+- (09-14) 새 PC에서 로봇망 MQTT가 아직 도달하지 않는다. ROS domain 10 노드, guardian,
   `vla_client`는 실행하지 않았다. 로봇 실험실 네트워크에 연결하고 감독자가 있을 때만
   아래 순서를 계속한다.
 - 격리 domain 213의 ROS 경계 test는 기존 test fixture가 새 필수 인자
