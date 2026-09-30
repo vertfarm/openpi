@@ -38,7 +38,8 @@ The next lever is the data, not the recipe.
 ## Next campaign (data v2)
 
 1. Record new sessions under a new dataset directory; never edit the existing two.
-2. Before recording, check the planned object layout against the targets in
+2. Before recording, measure the existing set with
+   `pipeline_eval demo-geometry` and check the planned object layout against the targets in
    STATUS.md: initial approach-direction cosine median <= 0.3, `|d15|` vs grasp
    distance `|r|` > 0.6.
 3. Add the sessions and the new track definitions to the `pipeline.py` constants,

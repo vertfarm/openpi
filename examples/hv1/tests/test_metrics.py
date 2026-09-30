@@ -8,6 +8,7 @@ import pytest
 from examples.hv1.artifacts import ContractError
 from examples.hv1.metrics import condition_intents
 from examples.hv1.metrics import cross_modal_matrix
+from examples.hv1.metrics import demo_geometry
 from examples.hv1.metrics import transition_metrics
 
 HORIZON = 15
@@ -122,3 +123,32 @@ def test_conditioning_refuses_a_series_it_cannot_filter(values):
 def test_conditioning_refuses_a_timeline_that_runs_backwards():
     with pytest.raises(ContractError, match="monotonic"):
         condition_intents(np.zeros(3), times=np.array([0.0, 0.2, 0.1]))
+
+
+def test_demo_geometry_measures_how_far_the_mean_trajectory_gets():
+    # Fixed start, objects 1 cm apart along y at the end of a 10 cm reach:
+    # the mean grasp is never more than 2 cm off, so the arm alone nearly solves it.
+    starts = np.zeros((5, 3))
+    grasps = np.array([[0.10, y, 0.0] for y in (-0.02, -0.01, 0.0, 0.01, 0.02)])
+    result = demo_geometry(starts, grasps)
+    assert result["start_pairwise_median"] == 0.0
+    assert result["reach_median"] == pytest.approx(0.10, rel=0.01)
+    assert result["loo_mean_grasp_error_median"] == pytest.approx(0.0125)
+    assert result["shortcut_ratio"] == pytest.approx(0.125, rel=0.01)
+    assert result["direction_cosine_median"] > 0.97  # the arm barely turns between objects
+    assert result["threshold_applied"] is False
+
+
+def test_demo_geometry_sees_objects_that_turn_the_arm():
+    starts = np.zeros((4, 3))
+    grasps = np.array([[0.1, 0, 0], [0, 0.1, 0], [-0.1, 0, 0], [0, -0.1, 0]])
+    result = demo_geometry(starts, grasps)
+    assert result["direction_cosine_median"] == pytest.approx(0.0, abs=1e-9)
+    assert result["shortcut_ratio"] > 1
+
+
+def test_demo_geometry_refuses_malformed_input():
+    with pytest.raises(ContractError):
+        demo_geometry(np.zeros((2, 3)), np.ones((2, 3)))
+    with pytest.raises(ContractError):
+        demo_geometry(np.zeros((3, 3)), np.zeros((3, 3)))

@@ -19,6 +19,7 @@ from .artifacts import write_new_json
 from .checkpoints import snapshot_identity
 from .metrics import condition_intents as condition_intents
 from .metrics import cross_modal_matrix as cross_modal_matrix
+from .metrics import demo_geometry as demo_geometry
 from .metrics import transition_metrics as transition_metrics
 from .native import CAMERAS
 from .native import PROMPT
@@ -505,6 +506,37 @@ def registered_config(campaign, snapshot, registry_path):
     return configure(campaign, record["recipe"])[0], record
 
 
+def campaign_demo_geometry(campaign):
+    """Start/grasp end-effector geometry of the campaign's demonstrations, per session.
+
+    CPU-only and read-only: it opens the recorded HDF5 and nothing else. The
+    positions are the controller's own `pose_r` (forward kinematics, TCP not
+    calibrated), so read spreads and ratios, not absolute placement. Units are metres.
+    """
+    import h5py
+
+    manifest = pipeline.verify_campaign(Path(campaign).resolve())
+    by_session = {}
+    for episode in manifest["episodes"]:
+        with h5py.File(Path(episode["path"]) / "data.hdf5", "r") as f:
+            position = np.asarray(f["observation.state.upper_body.pose_r"][:, :3], dtype=np.float64)
+        rows = by_session.setdefault(episode["session_id"], ([], []))
+        rows[0].append(position[0])
+        rows[1].append(position[episode["grasp_frame"]])
+    groups = {session: demo_geometry(*rows) for session, rows in sorted(by_session.items())}
+    groups["ALL"] = demo_geometry(
+        [start for rows in by_session.values() for start in rows[0]],
+        [grasp for rows in by_session.values() for grasp in rows[1]],
+    )
+    return {
+        "manifest_sha256": manifest["sha256"],
+        "source": "observation.state.upper_body.pose_r at frame 0 and grasp_frame",
+        "units": "m",
+        "groups": groups,
+        "robot_commands_sent": 0,
+    }
+
+
 def compare(campaign):
     campaign = Path(campaign).resolve()
     manifest = pipeline.verify_campaign(campaign)
@@ -858,6 +890,7 @@ def main():
             "sweep-filter-finetunes",
             "evaluate-cross-modal",
             "cross-modal-floor",
+            "demo-geometry",
         ],
     )
     parser.add_argument("--campaign", required=True)
@@ -908,6 +941,8 @@ def main():
         result = register(args.campaign, args.snapshot, args.reviewer)
     elif args.command == "compare":
         result = compare(args.campaign)
+    elif args.command == "demo-geometry":
+        result = campaign_demo_geometry(args.campaign)
     elif args.command == "sweep-filter":
         if not args.shadow_root or not args.output:
             parser.error("sweep-filter requires --shadow-root and --output")

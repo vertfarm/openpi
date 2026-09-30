@@ -145,3 +145,51 @@ def cross_modal_matrix(predict, cases):
             "means the policy answered from the state and ignored the scene."
         ),
     }
+
+
+def demo_geometry(starts, grasps):
+    """How much of a demonstration set a policy can solve without looking.
+
+    `starts` and `grasps` are (episodes, 3) end-effector positions at the first
+    frame and at the recorded grasp. The grasp position stands in for the object.
+    If the start barely moves and the objects sit close together compared with
+    the reach, the mean trajectory already lands near every object, and the
+    images are only worth that residual. On 2026-09-30 the 59 HV1 episodes had
+    a 1.0 cm start spread, a 16.6 cm reach and a 4.2 cm leave-one-out error for
+    the mean grasp - a shortcut ratio of about 0.25.
+
+    `shortcut_ratio` is that mean-only error over the median reach. Small means
+    the arm alone explains the task. No threshold is applied.
+    """
+    starts = np.asarray(starts, dtype=np.float64)
+    grasps = np.asarray(grasps, dtype=np.float64)
+    if starts.ndim != 2 or starts.shape != grasps.shape or starts.shape[1] != 3 or len(starts) < 3:
+        raise ContractError("need matching (episodes>=3, 3) start and grasp positions")
+    size = len(starts)
+    pairs = [(a, b) for a in range(size) for b in range(a + 1, size)]
+    reach = grasps - starts
+    lengths = np.linalg.norm(reach, axis=1)
+    if np.any(lengths == 0):
+        raise ContractError("an episode grasps where it starts")
+    directions = reach / lengths[:, None]
+    design = np.c_[starts, np.ones(size)]
+    mean_errors, regression_errors = [], []
+    for held in range(size):
+        rest = [index for index in range(size) if index != held]
+        mean_errors.append(float(np.linalg.norm(grasps[rest].mean(axis=0) - grasps[held])))
+        weights, *_ = np.linalg.lstsq(design[rest], grasps[rest], rcond=None)
+        regression_errors.append(float(np.linalg.norm(design[held] @ weights - grasps[held])))
+    median_reach = float(np.median(lengths))
+    loo_mean = float(np.median(mean_errors))
+    return {
+        "episodes": size,
+        "start_pairwise_median": float(np.median([np.linalg.norm(starts[a] - starts[b]) for a, b in pairs])),
+        "grasp_std": grasps.std(axis=0).tolist(),
+        "grasp_range": (grasps.max(axis=0) - grasps.min(axis=0)).tolist(),
+        "reach_median": median_reach,
+        "loo_mean_grasp_error_median": loo_mean,
+        "loo_start_regression_error_median": float(np.median(regression_errors)),
+        "direction_cosine_median": float(np.median([directions[a] @ directions[b] for a, b in pairs])),
+        "shortcut_ratio": loo_mean / median_reach,
+        "threshold_applied": False,
+    }

@@ -56,9 +56,9 @@ V3(둘의 결합). V2는 그룹별로 gap 부호가 갈려 한때 "일부 반응
 | 항목 | 값 |
 |---|---|
 | canonical 브랜치 | `codex/hv1-vla-workflow-20260909` (remote `origin`). 현장 5090 = GitHub |
-| 회귀 테스트 | 182개 통과(2026-09-30 5090 재확인, `.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 17초) |
+| 회귀 테스트 | 185개 통과(2026-09-30 5090 재확인, `.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 17초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
-| 진입점 | 10모듈 / 28명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
+| 진입점 | 10모듈 / 29명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
 | repo ↔ `vla_ws` 사본 | 5090 `keti_humanoid_ros2/ros2/vla_ws/src`, `core.py` 해시 09-30 재확인 일치. `core.py`·`node.py`·`guardian.py` byte 일치. `operator.py`·`__init__.py`는 **빈 줄 1개 차이, AST 동일** — 추적하지 말 것 |
 | `stash@{0}` | 6000 체크아웃에만 있다(`field-20260910-pre-ff-snapshot`). patch로 추출해 5090 `hv1-archive/field6000_residual_20260930/`에 보관. 5090 체크아웃에는 stash 없음 |

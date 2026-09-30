@@ -109,7 +109,7 @@ HV1 작업은 **전부 `examples/hv1/`에 격리**돼 있고 `src/openpi`는 수
 | 세션 검수·고정 manifest·export·통계 | `examples.hv1.pipeline` | [TRAINING.md](TRAINING.md) |
 | smoke → 트랙 학습·평가 순차 실행 / 절제 실험 | `examples.hv1.pipeline_run` | 같은 문서 |
 | 개별 학습 | `examples.hv1.pipeline_train` | 복구·개별 검증용 |
-| 평가·후보 등록 / **교차 모달 점검** | `examples.hv1.pipeline_eval` | 같은 문서의 「카메라를 쓰는가」 |
+| 평가·후보 등록 / **교차 모달 점검** / 시연 기하(`demo-geometry`) | `examples.hv1.pipeline_eval` | 같은 문서의 「카메라를 쓰는가」 |
 | 검수된 모델의 loopback HTTP 추론 | `examples.hv1.deploy_server` | [DEPLOYMENT.md](DEPLOYMENT.md) |
 
 **운영 도구 4개** — 본선에 끼지 않는 단독 도구:
