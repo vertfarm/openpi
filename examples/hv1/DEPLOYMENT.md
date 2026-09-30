@@ -1,18 +1,22 @@
-# HV1 π0.5 배포 — 오프라인 intent 조건화 검증, 실기 interlock 연동 대기
+# HV1 π0.5 배포 — shadow·감독하 실기 경로 구현 완료, 실측 한계 대기
+
+최종 갱신 2026-09-30. 현장 운영 PC는 RTX 5090이고 제어 스택은 `ROS_DOMAIN_ID=101` + CycloneDDS다.
+지금 사실은 [STATUS.md](STATUS.md)가 우선한다. 이 문서는 절차와 계약이다.
 
 목표는 학습 모델의 실시간 배포다. 수집 레시피는 관측·명령·시작 자세의
 계약이며, 전체 시연 재생은 배포 선행조건이 아니다.
 
 ## 구성과 검증 상태
 
-- 모델: 공식 OpenPI + 검수된 C-5000 BF16 snapshot. 비교 후보 F-5000.
+- 모델: 공식 OpenPI + 검수된 BF16 snapshot. 1순위 **TODAY30-1000 @ `--grip-min-hold 0.1`**,
+  2순위 ALL59-2000 @ 0.2(STATUS.md 「배포 후보」). C/F-5000은 은퇴했다.
 - host ML 환경: Python 3.11. ROS Jazzy container: Python 3.12.
 - 의존성을 섞지 않도록 loopback HTTP로 연결한다. 서버는 robot API를 import하지 않는다.
 - ROS 구현의 관리 원본은 이 폴더의
   [ros/keti_humanoid_inference](ros/keti_humanoid_inference)다.
   현장에는 기존 kh_ws를 수정하지 않는 별도 ros2/vla_ws overlay로 설치했다.
-- 서버 C-5000 실제 기록 관측 4개 HTTP 검수 통과: 왕복 약 60~66 ms.
-- 실제 ROS domain 10에서 60초 shadow: 446회 추론, 1,022개 무송신 목표,
+- 현장 5090에서 TODAY30-1000 서버 기록 관측 4개 HTTP 검수 통과: 왕복 약 62~75 ms(2026-09-14).
+- (2026-09-10, 이전 PC·domain 10 시절) 60초 shadow: 446회 추론, 1,022개 무송신 목표,
   callback 기준 왕복 중앙값 약 70 ms. 로봇 명령 0건.
 - 최초 DDS discovery 중 관측 누락, 일부 camera/state skew, 모델의 재파지 전환을
   발견했다. 이 기록을 실기 readiness 또는 물리 작업 성공으로 해석하지 않는다.
@@ -92,12 +96,20 @@ shadow에는 robot command publisher, gripper action/service client가 없다.
 상태는 /hv1_vla/status, 무송신 후보는 /hv1_vla/shadow/candidate로 나온다.
 events.jsonl과 observation_*.npz에 원시 관측·응답·실행 후보가 저장된다.
 
-## 실기 활성화에 필요한 외부 계약 — 현재 미완료
+## 실기 활성화에 필요한 외부 계약
 
-이 구현은 현재 존재하지 않는 물리 정지 API를 만들어 냈다고 가정하지 않는다.
-따라서 template은 approved=false이며 바로 live로 전환할 수 없다.
+2026-09-11에 guardian(`guardian.py`), `hold_here` 정지, 필드 프로파일이 구축돼
+감독하 45초 pilot이 돌았다(`rollout_013`). template은 여전히 approved=false이고,
+live는 검수된 별도 프로파일로만 시작한다. 항목별 상태(2026-09-30):
 
-현장 담당자와 아래 항목을 검증한 뒤 별도 프로파일로 제공해야 한다.
+| 항목 | 상태 |
+|---|---|
+| 1. 관절 범위·step·속도·가속도·시작 자세 | step/속도/가속도/시작 자세는 정책·시연 통계로 설정. **관절 범위 ±1.5708은 CAD 값이고 실측 아님.** `max_tracking_error` 0.15 잠정 |
+| 2. 독립 제어권 | guardian `exclusive` + 발행자 검사로 구현. 텔레옵·다른 writer 정지는 현장 절차 |
+| 3. watchdog·정지 | `hold_here` + `/hv1_vla/stop` + 감독자 E-stop. `hardware_watchdog_ready`는 명령행에서 명시해야 켜진다 |
+| 4. TCP·충돌·트레이 release | **미측정.** `--release-allowed`는 트레이 조건을 정한 뒤에만 |
+
+원 요구사항은 아래와 같다.
 
 1. 7축별 실측 범위, target step, tracking error, 속도·가속도, 시작 자세 허용 오차.
 2. 기존 teleop/replay/MoveL/trajectory action 및 다른 MQTT writer를 배제하는
@@ -124,6 +136,7 @@ events.jsonl과 observation_*.npz에 원시 관측·응답·실행 후보가 저
   E-stop가 이를 담당해야 하며, 시험 전 확인이 필요하다.
 
 현장 프로파일을 채운 뒤 live client를 시작해도 DISARMED 상태다.
+live·operator·guardian 터미널도 위 shadow와 같이 `.entrypoint.sh`와 `vla_ws` setup을 먼저 source한다.
 ARM은 같은 container의 소유자 전용 UNIX socket(0600)으로만 받는다.
 DDS 또는 HTTP에 ARM endpoint를 노출하지 않는다.
 
@@ -151,10 +164,11 @@ python -B -m pytest examples/hv1/tests -q -p no:cacheprovider
 ```
 
 ROS 통합 시험은 별도 domain 213 + ROS_LOCALHOST_ONLY=1일 때만 실행된다.
-MQTT는 모의 객체로 대체한다. 실제 domain 10에서 이 테스트의 skip을 해제하지 않는다.
+MQTT는 모의 객체로 대체한다. 실제 운영 domain(2026-09-30 기준 101)에서 이 테스트의 skip을 해제하지 않는다.
+(2026-09-14 기록: 이 ROS 경계 test 2건은 fixture가 새 필수 인자 `ensemble_decay`를 만들지 않아 실패한다. 미수정.)
 
 결과 해석: client/transport/command semantics 검수는 모델 성공률과 다르다.
-C-5000은 기록된 release 관측에서도 close를 출력한 사례가 있다. 실제 실기 전
+C-5000(은퇴)은 기록된 release 관측에서도 close를 출력한 사례가 있다. 실제 실기 전
 shadow 결과와 safety interlock을 확인하며, 안전 제한 완화로 해결하지 않는다.
 
 ## 감독자 부재 시 오프라인 검증
@@ -177,7 +191,8 @@ python -B -m examples.hv1.pipeline_eval sweep-filter \
 
 스윕은 유지시간 0.1/0.2/0.3/0.5초별 missed/extra close, close 시간오차,
 정적 correct-hand 재생의 false close를 함께 낸다. 기존 평가를 새 점수로 덮어쓰지
-않고, 필터 결과만으로 체크포인트를 자동 선정하거나 ARM하지 않는다. 야간 build 뒤에는
+않고, 필터 결과만으로 체크포인트를 자동 선정하거나 ARM하지 않는다.
+2026-09-10에 만든 `TODAY30_FT`·`ALL59_FT`는 금지된 추가학습이었고 사용하지 않는다(STATUS.md 「사용하지 말 것」). 야간 build 뒤에는
 ROS 노드를 띄우는 대신 `ros2 pkg prefix`, Python import 경로, `core.py` SHA-256만
 기록한다. live shadow와 실기는 감독자가 있는 시간에 다시 수행한다.
 
@@ -185,6 +200,6 @@ ROS 노드를 띄우는 대신 `ros2 pkg prefix`, Python import 경로, `core.py
 fine-tune을 허용한다. `TODAY30_FT`는 TODAY30-1000, `ALL59_FT`는 ALL59-2000의
 BF16 가중치에서 각각 독립적으로 시작하며 optimizer는 새로 만든다. 데이터·정규화
 통계·70/15/15 sampler는 부모 트랙과 동일하고 peak LR 2.5e-6, warmup 50,
-최대 1,000 update다. 현장 디스크의 50 GiB 하한을 지키기 위해 +500/+1000 추론본만
+최대 1,000 update다. (6000 시절) 현장 디스크의 50 GiB 하한을 지키기 위해 +500/+1000 추론본만
 보존하고 optimizer 재시작 상태는 저장하지 않는다. 새 모델도 teacher-forced intent와
 저장된 correct-hand 관측 재생을 모두 통과하기 전에는 registry나 배포 후보로 올리지 않는다.

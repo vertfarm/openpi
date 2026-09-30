@@ -13,6 +13,40 @@ snapshot and registry on disk carries it.
 Retired campaigns keep their own records under [docs/](docs/); their modules are
 deleted and those commands no longer run.
 
+Last updated 2026-09-30. [STATUS.md](STATUS.md) is the source for what is true now.
+
+## Where things are (2026-09-30)
+
+| What | Where |
+|---|---|
+| Field campaign | `~/workspace/hv1-vla-runtime/two-track-20260910-r3/` on the field RTX 5090. Holds the manifest, export, registry, evaluations and the deployed `snapshots/TODAY30/step_001000` |
+| All 11 surviving snapshots + `pi05_base` | `~/workspace/hv1-archive/tier_d_from_6000_20260930/` on the 5090, copied from the RTX PRO 6000 and SHA-256 verified (`meta/*SHA256SUMS.txt`). Read-only archive: copy out, never train into it |
+| Source recordings | `~/workspace/keti_humanoid_ros2/datasets/keti_humanoid_data_2609{09,10}` - the only irreplaceable asset |
+| Training host | Every snapshot so far was trained on the RTX PRO 6000 (97 GB). The 5090 (32 GB) has run inference and CPU tests only; a full pi0.5 fine-tune there is unverified |
+
+## The recipe, in numbers
+
+Full fine-tune from `pi05_base`, batch 2, 2,000 updates, peak LR 1e-5, warmup 100,
+cosine decay to 1e-6 over 5,000 steps (so training stops early in the decay), seed 42, 70/15/15 uniform/close/release sampling. For the
+59-episode set that is about **0.089 epoch**. `pipeline.recipe()` is the source;
+the numbers here are for orientation, not for editing.
+
+The ablations V1 (grasp-window loss weight), V2 (state noise) and V3 (both) did
+not make the policy use its cameras - see [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+The next lever is the data, not the recipe.
+
+## Next campaign (data v2)
+
+1. Record new sessions under a new dataset directory; never edit the existing two.
+2. Before recording, check the planned object layout against the targets in
+   STATUS.md: initial approach-direction cosine median <= 0.3, `|d15|` vs grasp
+   distance `|r|` > 0.6.
+3. Add the sessions and the new track definitions to the `pipeline.py` constants,
+   use a **new campaign directory**, and keep the existing tracks and their
+   recipes untouched so the deployed checkpoint stays loadable.
+4. Compare by epochs as well as updates - the old runs saw under a tenth of the data.
+5. Judge with `evaluate-cross-modal` first, then supervised shadow and live.
+
 ## The two tracks
 
 This campaign trains two independent policies from the official `pi05_base`:
@@ -155,9 +189,15 @@ inference.
 
 ## Latest ROS interface
 
+ROS runs in the `keti_humanoid_ros2_jazzy` container with `ROS_DOMAIN_ID=101` and
+CycloneDDS (2026-09-30). Take those from `source /workspace/.entrypoint.sh`; never
+hardcode them.
+
 - observation: `/kh/upper_body/observation/state/joint_states`
 - right-arm absolute target: `/kh/upper_body/action/joint`
 - right-hand observation: `/kdex_3f/right/rel_angle/joint_state`
+- cameras: `/kh/upper_body/head/color/image_raw/compressed`,
+  `/kdex_3f/left/camera/image_raw/compressed`, `/kdex_3f/right/camera/image_raw/compressed`
 - close: `/kdex_3f/right/grasp`
 - open: `/kdex_3f/right/set_open`
 
