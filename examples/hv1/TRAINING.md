@@ -32,21 +32,28 @@ cosine decay to 1e-6 over 5,000 steps (so training stops early in the decay), se
 the numbers here are for orientation, not for editing.
 
 The ablations V1 (grasp-window loss weight), V2 (state noise) and V3 (both) did
-not make the policy use its cameras - see [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
-The next lever is the data, not the recipe.
+not change the cross-modal numbers - see [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+All three ran at this same 4,000-sample budget, and training logs no validation
+loss, so the recipe is still a suspect alongside the data (2026-09-30).
 
-## Next campaign (data v2)
+## Next: evaluation and data together (2026-09-30, under review)
+
+Build the evaluation (fixed held-out of unseen object positions, validation-loss
+curve, a state-only kNN baseline, open-loop reach error) together with the data
+design, then compare recipes on top: update budget, `discrete_state_input` off
+(the official `pi05_libero` turns it off), LoRA vs full, an LR schedule that
+matches the run length. When new data is recorded:
 
 1. Record new sessions under a new dataset directory; never edit the existing two.
 2. Before recording, measure the existing set with
-   `pipeline_eval demo-geometry` and check the planned object layout against the targets in
-   STATUS.md: initial approach-direction cosine median <= 0.3, `|d15|` vs grasp
-   distance `|r|` > 0.6.
+   `pipeline_eval demo-geometry` and check that the planned layout raises
+   `shortcut_ratio` (0.25 today) - the mean trajectory must stop landing near every object.
+   Record a placement label per episode.
 3. Add the sessions and the new track definitions to the `pipeline.py` constants,
    use a **new campaign directory**, and keep the existing tracks and their
    recipes untouched so the deployed checkpoint stays loadable.
 4. Compare by epochs as well as updates - the old runs saw under a tenth of the data.
-5. Judge with `evaluate-cross-modal` first, then supervised shadow and live.
+5. Judge on the held-out set against the state-only baseline first, then supervised shadow and live.
 
 ## The two tracks
 
@@ -128,7 +135,10 @@ compares two near-zero numbers and reports a small gap for the wrong reason.
 filename because a different anchor is a different measurement.
 
 Measured 2026-09-11: both deployment candidates, both diagnostic groups, gap
-within +-0.0005 and direction cosine 0.996-0.999. Neither uses its cameras.
+within +-0.0005 and direction cosine 0.996-0.999: swapping the images barely moved
+either. Read that with its limits - every swapped image is a post-grasp frame, and
+`today_fixed6` is inside TODAY30's training set - so it shows the arm dominates,
+not that the images are unused.
 
 **No threshold is applied and none is stored.** The command records the numbers;
 a supervisor reads them. It needs the GPU lock, so stop `deploy_server` first.
