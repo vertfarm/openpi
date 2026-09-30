@@ -52,7 +52,7 @@
 | 항목 | 값 |
 |---|---|
 | canonical 브랜치 | `codex/hv1-vla-workflow-20260909` (remote `origin`). 현장 5090 = GitHub |
-| 회귀 테스트 | 185개 통과(2026-09-30 5090 재확인, `.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 17초) |
+| 회귀 테스트 | 249개 통과(2026-09-30, 공개 저장소 위생 검사 `test_public_hygiene.py` 포함, `.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 17초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 29명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
 | ROS `core.py` 소스 SHA | `59775ee4d0826b09f9b296014269d6ce55271644513dddc17f64e99b13c9566c` |
