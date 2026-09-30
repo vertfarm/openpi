@@ -38,11 +38,7 @@ loss, so the recipe is still a suspect alongside the data (2026-09-30).
 
 ## Next: evaluation and data together (2026-09-30, under review)
 
-Build the evaluation (fixed held-out of unseen object positions, validation-loss
-curve, a state-only kNN baseline, open-loop reach error) together with the data
-design, then compare recipes on top: update budget, `discrete_state_input` off
-(the official `pi05_libero` turns it off), LoRA vs full, an LR schedule that
-matches the run length. When new data is recorded:
+Direction and candidates live in [STATUS.md](STATUS.md) 「다음 단계」. When new data is recorded:
 
 1. Record new sessions under a new dataset directory; never edit the existing two.
 2. Before recording, measure the existing set with
