@@ -87,10 +87,11 @@ source /workspace/.entrypoint.sh
 source /workspace/ros2/vla_ws/install/setup.bash
 test "$RMW_IMPLEMENTATION" = rmw_cyclonedds_cpp && echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 ros2 run keti_humanoid_inference vla_client \
-  --mode shadow --mqtt-host 192.168.0.142 --seconds 60 \
+  --mode shadow --mqtt-host <MQTT_HOST> --seconds 60 \
   --output /workspace/ros2/vla_ws/log/NEW_UNIQUE_SHADOW_SESSION
 ```
 
+`<MQTT_HOST>`는 로봇 LAN의 MQTT 브로커 주소다. 제어 쪽 설정이나 현장 담당자에게 받고, 이 저장소에는 적지 않는다.
 output은 매번 새 디렉터리여야 한다. raw dataset을 output으로 사용하지 않는다.
 shadow에는 robot command publisher, gripper action/service client가 없다.
 상태는 /hv1_vla/status, 무송신 후보는 /hv1_vla/shadow/candidate로 나온다.
@@ -142,7 +143,7 @@ DDS 또는 HTTP에 ARM endpoint를 노출하지 않는다.
 
 ```bash
 ros2 run keti_humanoid_inference vla_client \
-  --mode live --mqtt-host 192.168.0.142 --profile REVIEWED_FIELD_PROFILE.json \
+  --mode live --mqtt-host <MQTT_HOST> --profile REVIEWED_FIELD_PROFILE.json \
   --seconds 0 --output /tmp/NEW_UNIQUE_LIVE_SESSION
 
 # 현장 담당자가 로봇과 E-stop를 보면서 다른 terminal에서 수행

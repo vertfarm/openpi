@@ -6,8 +6,10 @@
 ## 저장소와 작업트리
 
 - canonical 브랜치: `codex/hv1-vla-workflow-20260909` (remote `origin`)
-- 두 작업트리가 같은 브랜치를 쓴다. 현장 리눅스 `~/workspace/openpi-hv1`,
-  Windows Codex 워크스페이스(SSH 터널). **git이 두 머신이 공유하는 유일한 채널이다.**
+- 작업트리는 현장 운영 PC(RTX 5090) `~/workspace/openpi-hv1` 하나가 기준이다(2026-09-30).
+  현장 PC에는 GitHub 인증이 없으므로, 인증된 PC가 `git bundle`로 커밋을 받아 푸시한다.
+  **git이 머신 간 코드를 공유하는 유일한 채널이다.**
+- RTX PRO 6000은 보관·대형 학습 후보다. 그쪽 체크아웃(`1fdd5a7` + stash)은 기준이 아니다.
 - OneDrive/Obsidian wiki는 사람의 기록이다. 현장 머신에서 읽을 수 없으므로
   에이전트 간 조율 채널로 쓰지 않는다.
 - 트리가 갈라져 보이면 먼저 `git fetch` 후 실제 차이를 확인한다.
@@ -52,7 +54,7 @@
 
 ## 자원
 
-- 디스크 게이트 50GiB (`artifacts.py`의 `MIN_FREE`). 여유를 확인하고 시작한다.
+- 디스크 게이트 15GiB (`artifacts.py`의 `MIN_FREE`, 2026-09-11 감독자 승인). 학습 1회는 그 위에 40GiB를 더 요구한다. 여유를 확인하고 시작한다.
 - GPU는 1개다. `hv1-vla-runtime/hv1-ml-gpu.lock`으로 직렬화한다.
 - 장시간 작업 후 lock 해제와 프로세스 종료를 확인한다.
 
@@ -82,9 +84,9 @@
   은퇴한 절차 기록만 `examples/hv1/docs/`에 날짜와 함께 남긴다.
   문서를 `hv1-vla-runtime`으로 옮기지 않는다 — git에 없으므로 다른 머신이 읽지 못한다.
 - git history를 재작성하지 않는다. force push, 세대별 WIP 커밋을 만들지 않는다.
+  예외는 저장소 소유자가 명시적으로 지시한 경우뿐이며 `--force-with-lease`로 하고 STATUS.md에 남긴다
+  (2026-09-30: 마지막 두 커밋의 공동 저자 줄 제거, 트리 동일).
 - 코드를 지울 때는 테스트를 먼저 이관한다. 커버리지가 줄어드는 삭제는 하지 않는다.
-- 남은 구조 정리(C4 rename, C5 문서 이동, C6 진입점 통합)는 STATUS.md의
-  「정리 작업」 순서를 따른다.
 
 ## 세션 종료 시
 

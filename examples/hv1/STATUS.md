@@ -48,6 +48,7 @@ V3(둘의 결합). V2는 그룹별로 gap 부호가 갈려 한때 "일부 반응
 | 손 | 드라이버 `kdex_3f` `076a446`은 현장에만 있고 GitHub에 없다(푸시 요청 중). 손 속도 4.5·가속도 10 |
 | 관절 한계 | 필드 프로파일 ±1.5708은 **CAD 값이며 실측한 적 없다**(아래 프로파일 표). controller `limits_verified`는 `false`가 실효값이고 servo streaming에는 적용되지 않는다 |
 | 이전 후 실기 | 5090에서 guardian·`vla_client` live 실행 기록은 없다. 마지막 실기는 09-11 `rollout_013` |
+| git 이력 | 2026-09-30 소유자 지시로 마지막 두 커밋의 공동 저자 줄을 지우고 `--force-with-lease` 푸시(`2f39e5f`→`2c4e358`, `634d54e`→`fb08de9`, 트리 동일) |
 | 조회 시점 topic | 09-30 조회 때 `joint_states`만 떠 있었고 손·카메라 topic은 없었다. 실행 전 3개 카메라와 `rel_angle`이 모두 뜨는지 확인한다 |
 
 ## 코드 상태
@@ -345,15 +346,15 @@ registry의 `schema`가 `hv1_two_track_v1`이 아니면 스냅샷을 열기 전�
 
 ### 실행 순서
 
-세 터미널이 필요하다. guardian 터미널의 Ctrl-C가 정지 손잡이다.
+세 터미널이 필요하다. guardian 터미널의 Ctrl-C가 정지 손잡이다. `<MQTT_HOST>`는 로봇 LAN 브로커 주소다(저장소에 적지 않는다).
 ROS 쪽 터미널(2·3)은 먼저 `source /workspace/.entrypoint.sh`와 `source /workspace/ros2/vla_ws/install/setup.bash`를 하고 `ROS_DOMAIN_ID=101`인지 본다.
 
 ```
 1  deploy_server  --snapshot snapshots/TODAY30/step_001000 --registry checkpoint_registry.json
-2  python3 -m keti_humanoid_inference.guardian --profile <프로파일> --mqtt-host 192.168.0.142
+2  python3 -m keti_humanoid_inference.guardian --profile <프로파일> --mqtt-host <MQTT_HOST>
                   --workspace-clear --hardware-watchdog [--release-allowed]
 3  ros2 run keti_humanoid_inference vla_client --mode live --port 8000 --grip-min-hold 0.1
-                  --profile <프로파일> --mqtt-host 192.168.0.142 --output <새 디렉터리>
+                  --profile <프로파일> --mqtt-host <MQTT_HOST> --output <새 디렉터리>
 ```
 
 **재빌드는 하지 않는다.** `--symlink-install`이라 `vla_ws/src`에 복사하면 즉시
@@ -365,6 +366,8 @@ ROS 쪽 터미널(2·3)은 먼저 `source /workspace/.entrypoint.sh`와 `source 
 fault가 난다.
 
 ## 다음 단계
+
+> 2026-09-30 재정리: 원인 후보는 데이터 모양과 **학습량**(2,000 × batch 2 = 약 0.089 epoch, 공식 소규모 예제의 약 1/300) 둘이며 아직 분리되지 않았다. 수집 전에 기존 데이터로 장시간 학습 1회를 먼저 해 볼 수 있다 — [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 「원인 재정리」.
 
 파이프라인은 끝났다. 남은 것은 **정책이 이미지를 보게 만드는 것**이고,
 코드로 하는 시도는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)에서 셋 다 실패했다.

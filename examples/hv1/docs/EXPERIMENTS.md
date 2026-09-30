@@ -8,6 +8,53 @@
 **한 줄:** 손실 가중(V1)도, state 노이즈(V2)도, 둘의 결합(V3)도 듣지 않았다.
 코드 레버는 소진됐고 남은 길은 수집 재설계다.
 
+## 원인 재정리 (2026-09-30) — 데이터 모양 + 학습량, 아직 분리되지 않았다
+
+V1~V3는 **모두 같은 2,000 update × batch 2**에서 손실·입력만 바꿨다.
+"충분히 학습하면 이미지를 쓰기 시작하는가"는 한 번도 시험하지 않았다.
+
+**데이터 모양.** 59개 에피소드의 오른손 TCP(`observation.state.upper_body.pose_r`)로
+잰 값이다. 파지 프레임의 TCP를 물체 위치로 본다.
+
+| 측정 | 09-09 (29) | 09-10 (30) | 전체 (59) |
+|---|---:|---:|---:|
+| 시작 TCP 쌍별 거리 중앙 | 1.2 cm | 0.6 cm | **1.0 cm** |
+| 파지 TCP 축별 std (x, y, z) | 3.2, 3.3, 1.0 cm | 4.4, 5.0, 1.0 cm | **4.1, 4.3, 1.0 cm** |
+| 시작 → 파지 거리 중앙 | 16.1 cm | 17.7 cm | **16.6 cm** |
+| 평균 파지 위치로 예측할 때 LOO 오차 중앙 | 3.2 cm | 6.4 cm | **4.2 cm** |
+| 시작 자세 선형 회귀로 예측할 때 LOO 오차 중앙 | 3.2 cm | 6.6 cm | 4.5 cm |
+| 시작 → 파지 방향 코사인 중앙 | 0.986 | 0.945 | **0.971** |
+
+시작이 고정돼 있고 물체 흩어짐(약 4 cm)이 도달 거리(약 17 cm)에 비해 작다. 그래서
+**평균 궤적만으로 파지 위치를 약 4 cm 안에 맞힌다.** 이미지가 줄 수 있는 이득은 그
+몇 cm 보정뿐이고, 224 입력에서 실린더는 면적 약 1%다.
+
+**학습량.** OpenPI 공식 설정과 비교한다(`src/openpi/training/config.py`).
+
+| 설정 | update × batch | 본 샘플 |
+|---|---|---:|
+| HV1 트랙·V1~V3 | 2,000 × 2 | **4,000 (약 0.089 epoch)** |
+| `pi05_aloha_pen_uncap` (소규모 단일 과제) | 20,000 × 64 | 1,280,000 |
+| `pi05_libero` | 30,000 × 256 | 7,680,000 |
+| `TrainConfig` 기본값 | 30,000 × 32 | 960,000 |
+
+비슷한 규모의 공식 예제보다 약 300배 적다. 이 학습량에서는 가장 싼 신호
+(π0.5가 프롬프트 토큰으로 넣는 state → 평균 동작)가 먼저 학습되고, 시각 보정까지
+갈 여지가 없었을 가능성이 크다.
+
+**판단.** "π0.5 베이스 붕괴"의 증거는 없다(공식 `pi05_base` 해시 확인, intent 헤드 정상,
+카메라 경로 학습·배포 동일). 현상은 proprioception 지름길이고, 원인 후보는 데이터
+모양과 학습량 둘이다. 시연 개수(59)만으로 실패라고 단정할 근거는 아직 없다.
+
+**다음 실험(수집 전, 기존 데이터).** 기존 트랙 데이터로 update·batch를 공식 소규모
+과제 수준(예: 20k~30k update, batch 32 이상, 메모리가 부족하면 6000 또는 LoRA)으로
+**새 실험 이름**을 만들어 학습하고 `evaluate-cross-modal`을 잰다. 트랙 레시피는
+고치지 않는다(`ABLATIONS`에 추가).
+
+- gap이 노이즈 바닥(std 0.00088)을 분명히 넘으면 → 학습량이 주 원인이다. 데이터 v2도 그 레시피로 간다.
+- 그대로면 → 데이터 모양이 주 원인이다. 수집 재설계에서 시작 자세·물체 범위를 넓혀
+  "평균만 써도 생기는 오차"를 도달 거리에 비해 크게 만든다.
+
 ## 측정 도구 — 교차 모달 행렬
 
 teacher-forced 평가는 정답 state를 그대로 주므로 시각 미사용을 **감지하지 못한다.**
@@ -122,11 +169,14 @@ V1은 이미 학습이 끝나 있으므로 teacher-forced 평가만 채우고 �
 **절제 실험은 registry에 등록하지 않는다** — 배포 후보가 아니므로 `register` 단계가
 의도적으로 없다.
 
-**원격(Windows)에서 띄우기.** SSH 터널이 이미 열려 있다(git fetch가 그 위로 돈다).
-GPU·데이터가 현장에만 있으므로 Windows는 **띄우고 읽기만** 한다.
+**원격에서 띄우기.** GPU·데이터가 현장 PC에만 있으므로 다른 PC는 SSH로 **띄우고 읽기만** 한다.
+접속 정보는 이 저장소에 넣지 않는다. 현장 PC 셸에서 실행할 명령은 다음과 같다.
 
 ```
-ssh -p 2223 keti@127.0.0.1 'cd ~/workspace/openpi-hv1 && setsid nohup .venv/bin/python -B -m examples.hv1.pipeline_run --campaign ~/workspace/hv1-vla-runtime/two-track-20260910-r3 --ablations --deadline 2026-09-14T12:00:00+09:00 --allow-gpu-run > ~/workspace/hv1-vla-runtime/two-track-20260910-r3/ablations.log 2>&1 < /dev/null & echo launched'
+cd ~/workspace/openpi-hv1 && setsid nohup .venv/bin/python -B -m examples.hv1.pipeline_run \
+  --campaign ~/workspace/hv1-vla-runtime/two-track-20260910-r3 --ablations \
+  --deadline <미래 ISO8601+offset> --allow-gpu-run \
+  > ~/workspace/hv1-vla-runtime/two-track-20260910-r3/ablations.log 2>&1 < /dev/null &
 ```
 
 `setsid`와 `< /dev/null`이 없으면 ssh 세션이 끊길 때 학습이 같이 죽는다.
