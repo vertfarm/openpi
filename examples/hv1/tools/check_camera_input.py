@@ -68,8 +68,9 @@ def grab_live():
             "keti_humanoid_ros2_jazzy",
             "bash",
             "-lc",
-            "source /opt/ros/jazzy/setup.bash; export ROS_DOMAIN_ID=10 "
-            "RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; python3 /tmp/_grab_check.py",
+            # DDS env (domain, RMW, CYCLONEDDS_URI) comes from the control side's
+            # .entrypoint.sh; the container default ROS_DOMAIN_ID=30 is not the robot's.
+            "source /workspace/.entrypoint.sh; python3 /tmp/_grab_check.py",
         ],
         check=True,
         capture_output=True,

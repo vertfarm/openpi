@@ -76,12 +76,12 @@ F 비교는 C 서버와 실기 client를 정지·확인한 뒤 snapshot 경로�
 현장 ROS container에서, upper를 추가로 실행하거나 기존 스택을 재시작하지 않는다:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source /workspace/ros2/hand_ws/install/setup.bash
-source /workspace/ros2/kh_ws/install/setup.bash
+# DDS 환경(ROS_DOMAIN_ID, RMW, CYCLONEDDS_URI)은 제어 쪽 .entrypoint.sh가 단일 출처다.
+# 2026-09-30 기준 ROS_DOMAIN_ID=101, CycloneDDS, 유선 인터페이스 고정. 여기서 값을 하드코딩하지 않는다.
+# container 기본 env는 ROS_DOMAIN_ID=30이라 docker exec 비대화형 셸은 반드시 이 파일을 source해야 한다.
+source /workspace/.entrypoint.sh
 source /workspace/ros2/vla_ws/install/setup.bash
-export ROS_DOMAIN_ID=10
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+test "$RMW_IMPLEMENTATION" = rmw_cyclonedds_cpp && echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 ros2 run keti_humanoid_inference vla_client \
   --mode shadow --mqtt-host 192.168.0.142 --seconds 60 \
   --output /workspace/ros2/vla_ws/log/NEW_UNIQUE_SHADOW_SESSION
