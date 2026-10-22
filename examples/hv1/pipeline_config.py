@@ -16,6 +16,64 @@ from .native import PROMPT
 from .openpi_run import make_config
 
 
+@dataclasses.dataclass(frozen=True)
+class HandStateMask:
+    """Pin the hand channels of the state to constants, keeping its shape.
+
+    Runs before `HV1Inputs`. The arm delta is computed only against the arm
+    channels, so the targets do not move; the policy simply never sees what the
+    hand is doing. Built by `configure`, which training and every evaluation
+    share - a policy trained blind must also be evaluated blind.
+    """
+
+    indices: tuple[int, ...]
+    values: tuple[float, ...]
+
+    def __call__(self, data):
+        import numpy as np
+
+        state = np.array(data["state"], dtype=np.float32)
+        if state.ndim != 1 or len(self.indices) != len(self.values) or max(self.indices) >= len(state):
+            raise ContractError("hand mask does not fit the state")
+        state[list(self.indices)] = self.values
+        return {**data, "state": state}
+
+
+def _hand_masked(data, mask):
+    """Return the data config factory with `mask` ahead of its own inputs."""
+    from openpi import transforms
+
+    inner = data.data_transforms
+
+    def data_transforms(model):
+        group = inner(model)
+        return transforms.Group(inputs=(mask, *group.inputs), outputs=group.outputs)
+
+    return dataclasses.replace(data, data_transforms=data_transforms)
+
+
+def hand_indices(names):
+    """Where the hand channels sit in the profile's state vector."""
+    from .native import HAND_STATE
+
+    hand = {name.removeprefix("position/") for name in HAND_STATE}
+    indices = tuple(index for index, name in enumerate(names) if name in hand)
+    if len(indices) != len(HAND_STATE):
+        raise ContractError("profile state names do not contain every hand channel")
+    return indices
+
+
+def hand_state_mask(manifest, stats_path):
+    """The mask an ablation with `mask_hand_state` trains and evaluates under."""
+    import numpy as np
+
+    from openpi.shared import normalize
+
+    indices = hand_indices(manifest["profile"]["state"]["names"])
+    mean = np.asarray(normalize.load(Path(stats_path).parent)["state"].mean, dtype=np.float64)
+    return HandStateMask(indices=indices, values=tuple(float(mean[index]) for index in indices))
+
+
 def local_dataset(data, model, root):
     """Use the explicit local LeRobot export and never fall back to the Hub."""
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -101,11 +159,13 @@ def configure(campaign, recipe):
         state_names=manifest["profile"]["state"]["names"],
         camera_dropout=False,
         gripper=manifest["profile"]["gripper"],
-        train_episode_ids=expected_ids,
+        train_episode_ids=sorted(pipeline.training_ids(manifest, recipe)),
         diagnostic_episode_ids=manifest["diagnostics"],
         norm_stats_sha256=file_hash(stats_path),
         normalization_asset_id=asset_id,
-        validation_scope="training_overlap_diagnostics_only",
+        validation_scope=(
+            "held_out_diagnostics" if recipe.get("holdout") == "diagnostics" else "training_overlap_diagnostics_only"
+        ),
         initialization=recipe["initialization"],
         parent_snapshot=None if parent_record is None else recipe["parent"]["snapshot"],
         parent_snapshot_sha256=None if parent_record is None else file_hash(parent / "snapshot.json"),
@@ -130,12 +190,15 @@ def configure(campaign, recipe):
             )
         },
     )
+    data = dataclasses.replace(
+        config.data,
+        assets=AssetsConfig(assets_dir=str(campaign / "assets"), asset_id=asset_id),
+    )
+    if recipe.get("mask_hand_state"):
+        data = _hand_masked(data, hand_state_mask(manifest, stats_path))
     config = dataclasses.replace(
         config,
-        data=dataclasses.replace(
-            config.data,
-            assets=AssetsConfig(assets_dir=str(campaign / "assets"), asset_id=asset_id),
-        ),
+        data=data,
         weight_loader=weight_loader,
         freeze_filter=config.model.get_freeze_filter(),
         batch_size=recipe["batch_size"],

@@ -194,6 +194,24 @@ target differently and become label noise the model cannot undo. The config
 `make_loader`. Do not move this into `transforms.py`; that would noise live
 inference.
 
+### E5: training amount, and the hand state (2026-10-22)
+
+`ALL59_HO_30K` and `ALL59_HO_30K_NOHAND` ask whether the policy was simply
+under-trained. They run 30,000 updates (cosine decay over the whole run), keep
+snapshots at 2,000 / 10,000 / 30,000, and hold the twelve diagnostic episodes
+out of training (`holdout="diagnostics"`), so `evaluate` and
+`evaluate-cross-modal` on those episodes score unseen data for the first time.
+Normalization stays the ALL59 statistics, which include the held-out episodes.
+
+`mask_hand_state` (the second experiment only) pins every hand channel to its
+training mean. Unlike state noise it is built in `configure`, because a policy
+trained without the hand must be evaluated without it; the live node never
+applies it, so these snapshots can't be deployed.
+
+Each run is about 30,000 x 0.5 s on the RTX PRO 6000 (about 4.2 h) and keeps
+three 4.9 GiB snapshots. `--ablations` evaluates only the last snapshot; run
+`evaluate` and `evaluate-cross-modal` on the 2,000 and 10,000 snapshots yourself.
+
 ## Latest ROS interface
 
 ROS runs in the `keti_humanoid_ros2_jazzy` container with `ROS_DOMAIN_ID=101` and

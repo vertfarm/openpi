@@ -62,7 +62,8 @@ TARGET_STEPS = 2000
 # overriding something, so they must be listed here explicitly - a track's recipe
 # must keep the exact fields its snapshots were written with, or configure stops
 # recognising them.
-ABLATION_ONLY_FIELDS = ("state_noise_sigma",)
+ABLATION_ONLY_FIELDS = ("state_noise_sigma", "holdout", "mask_hand_state")
+HOLDOUTS = ("diagnostics",)
 
 ABLATIONS = {
     # V1 (run 2026-09-11, no effect). The stopping decision is where object
@@ -82,6 +83,34 @@ ABLATIONS = {
         track="TODAY30",
         phase_fractions={"uniform": 0.40, "close": 0.45, "release": 0.15},
         state_noise_sigma=1.0,
+    ),
+    # E5 (2026-10-22). Training amount. The tracks saw 4,000 samples, 0.089 of an
+    # epoch; the OpenArm handover policy that grasped at all saw 120,000 (about
+    # 2.2 epochs), so how much of the failure is under-training was never asked.
+    # One run, read at 2k / 10k / 30k updates, with the cosine decay stretched to
+    # the run so the end is actually annealed. The twelve diagnostic episodes are
+    # held out of training here - in the tracks they were trained on, so every
+    # score on them so far was on seen data.
+    "ALL59_HO_30K": dict(
+        track="ALL59",
+        steps=30000,
+        snapshots=[2000, 10000, 30000],
+        decay_steps=30000,
+        holdout="diagnostics",
+    ),
+    # G2. The same run with the hand state hidden. The hand joints record the
+    # fingers closing 3-4 frames after the command and nothing before it, so a
+    # policy can learn to close by reading that the hand already closed. Every
+    # hand channel is pinned to its training mean, in training and evaluation
+    # alike; the live node does not do this, which is one more reason ablations
+    # are never registered.
+    "ALL59_HO_30K_NOHAND": dict(
+        track="ALL59",
+        steps=30000,
+        snapshots=[2000, 10000, 30000],
+        decay_steps=30000,
+        holdout="diagnostics",
+        mask_hand_state=True,
     ),
 }
 
@@ -319,6 +348,40 @@ def track_ids(manifest, track):
     return set(manifest["tracks"][track]["episode_ids"])
 
 
+def held_out_ids(manifest):
+    """The diagnostic groups, which the tracks trained on and ablations may not."""
+    return {episode["id"] for episode in manifest["episodes"] if episode.get("diagnostic_group")}
+
+
+def training_ids(manifest, recipe_value):
+    """The episodes a recipe actually trains on: its track minus any holdout.
+
+    Normalization stays the track's, computed over all of it, so a held-out
+    episode still shapes the statistics. That is a small leak, kept on purpose:
+    new statistics would be a second variable in a one-variable comparison.
+    """
+    selected = track_ids(manifest, recipe_value["track"])
+    holdout = recipe_value.get("holdout")
+    if holdout is None:
+        return selected
+    if holdout not in HOLDOUTS:
+        raise ContractError(f"unknown holdout {holdout!r}")
+    remaining = selected - held_out_ids(manifest)
+    if not remaining or remaining == selected:
+        raise ContractError("holdout must remove some, not all, training episodes")
+    return remaining
+
+
+def planned_steps(name):
+    if name == "SMOKE":
+        return 50
+    if name in FILTER_FINETUNES:
+        return 1000
+    if name in ABLATIONS:
+        return ABLATIONS[name].get("steps", TARGET_STEPS)
+    return TARGET_STEPS
+
+
 def compute_statistics(campaign, track):
     from openpi.shared import normalize
 
@@ -358,10 +421,12 @@ def compute_statistics(campaign, track):
     return provenance
 
 
-def recipe(name, manifest_sha, steps=TARGET_STEPS):
+def recipe(name, manifest_sha, steps=None):
     if name not in {*TRACKS, *FILTER_FINETUNES, *ABLATIONS, "SMOKE"}:
         raise ContractError("unknown two-track experiment")
-    expected_steps = 50 if name == "SMOKE" else 1000 if name in FILTER_FINETUNES else TARGET_STEPS
+    expected_steps = planned_steps(name)
+    if steps is None:
+        steps = expected_steps
     if steps != expected_steps:
         raise ContractError("recipe step count differs from the approved two-track plan")
     snapshots = (
@@ -369,7 +434,7 @@ def recipe(name, manifest_sha, steps=TARGET_STEPS):
         if name == "SMOKE"
         else [500, 1000]
         if name in FILTER_FINETUNES
-        else [TARGET_STEPS]
+        else [expected_steps]
         if name in ABLATIONS
         else [250, 500, 1000, TARGET_STEPS]
     )
@@ -426,15 +491,21 @@ def recipe(name, manifest_sha, steps=TARGET_STEPS):
                 raise ContractError(f"ablation {name} overrides unknown recipe field {key!r}")
             value[key] = override
         value["ablation_of"] = ABLATIONS[name]["track"]
+        shots = value["snapshots"]
+        if shots != sorted(set(shots)) or shots[-1] != value["steps"] or shots[0] <= 0:
+            raise ContractError(f"ablation {name} snapshots must rise to its step count")
+        if value.get("holdout") not in (None, *HOLDOUTS):
+            raise ContractError(f"ablation {name} has an unknown holdout")
+        if value.get("mask_hand_state") not in (None, True):
+            raise ContractError(f"ablation {name} mask_hand_state must be True when set")
     return value
 
 
 def sample_schedule(manifest, name, samples):
     if samples <= 0 or samples % 100:
         raise ContractError("sample count must be a positive multiple of 100")
-    steps = 50 if name == "SMOKE" else 1000 if name in FILTER_FINETUNES else TARGET_STEPS
-    recipe_value = recipe(name, manifest["sha256"], steps)
-    selected = track_ids(manifest, recipe_value["track"])
+    recipe_value = recipe(name, manifest["sha256"])
+    selected = training_ids(manifest, recipe_value)
     offsets, start = {}, 0
     for episode in manifest["episodes"]:
         offsets[episode["id"]] = start
@@ -521,7 +592,7 @@ def write_ablation_schedules(campaign):
     manifest = verify_campaign(campaign)
     result = {}
     for name in ABLATIONS:
-        value = recipe(name, manifest["sha256"], TARGET_STEPS)
+        value = recipe(name, manifest["sha256"])
         schedule = sample_schedule(manifest, name, value["steps"] * value["batch_size"])
         path = campaign / f"sampler_{name}.json"
         if path.exists():

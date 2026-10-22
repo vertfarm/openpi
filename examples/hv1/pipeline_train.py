@@ -119,8 +119,7 @@ def make_loader(config, schedule, sharding, consumed=0):
 def train(campaign, name, deadline, *, resume=False):
     campaign = Path(campaign).resolve()
     manifest = pipeline.verify_campaign(campaign, raw=True)
-    steps = 50 if name == "SMOKE" else 1000 if name in pipeline.FILTER_FINETUNES else pipeline.TARGET_STEPS
-    recipe = pipeline.recipe(name, manifest["sha256"], steps)
+    recipe = pipeline.recipe(name, manifest["sha256"])
     schedule = pipeline.checked(campaign / f"sampler_{name}.json")
     expected = pipeline.sample_schedule(manifest, name, recipe["steps"] * recipe["batch_size"])
     if schedule != expected:

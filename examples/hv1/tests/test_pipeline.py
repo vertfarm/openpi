@@ -371,7 +371,7 @@ def test_an_ablation_changes_exactly_one_thing_about_its_track():
         assert ablation["track"] == base["track"] == spec["track"]
         assert ablation["ablation_of"] == spec["track"]
         assert ablation["seed"] == base["seed"] and ablation["peak_lr"] == base["peak_lr"]
-        assert ablation["snapshots"] == [pipeline.TARGET_STEPS]
+        assert ablation["snapshots"][-1] == ablation["steps"] == pipeline.planned_steps(name)
         assert ablation["robot_motion_authorized"] is False
 
 
@@ -596,3 +596,98 @@ def test_filter_finetune_recipe_is_parented_and_low_rate():
     assert recipe["warmup_steps"] == 50
     assert recipe["snapshots"] == [500, 1000]
     assert recipe["initialization"] == "BF16_parent_weights_FP32_training_new_optimizer"
+
+
+def test_the_training_amount_scan_reads_one_long_run_at_three_points():
+    """E5: 2k is where the tracks stopped; 30k is about the OpenArm handover
+    budget. The decay has to end with the run or the last snapshot is not annealed."""
+    value = manifest()
+    for name in ("ALL59_HO_30K", "ALL59_HO_30K_NOHAND"):
+        recipe = pipeline.recipe(name, value["sha256"])
+        assert recipe["track"] == "ALL59"
+        assert recipe["steps"] == recipe["decay_steps"] == 30000
+        assert recipe["snapshots"] == [2000, 10000, 30000]
+        assert recipe["batch_size"] == 2
+        assert recipe["peak_lr"] == 1e-5
+        assert recipe["holdout"] == "diagnostics"
+    assert pipeline.recipe("ALL59_HO_30K_NOHAND", value["sha256"])["mask_hand_state"] is True
+    assert "mask_hand_state" not in pipeline.recipe("ALL59_HO_30K", value["sha256"])
+    with pytest.raises(ContractError, match="step count"):
+        pipeline.recipe("ALL59_HO_30K", value["sha256"], pipeline.TARGET_STEPS)
+
+
+def test_a_held_out_schedule_never_draws_a_diagnostic_episode():
+    value = manifest()
+    held = pipeline.held_out_ids(value)
+    assert len(held) == 12
+    schedule = pipeline.sample_schedule(value, "ALL59_HO_30K", 60000)
+    assert len(schedule["train_episode_ids"]) == len(value["tracks"]["ALL59"]["episode_ids"]) - 12
+    assert not held & set(schedule["train_episode_ids"])
+    assert not held & {row["episode"] for row in schedule["records"]}
+    # The tracks themselves still train on every episode, as their snapshots did.
+    assert held <= set(pipeline.sample_schedule(value, "ALL59", 4000)["train_episode_ids"])
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        (dict(steps=3000, snapshots=[1000, 2000]), "rise to its step count"),
+        (dict(steps=3000, snapshots=[2000, 1000, 3000]), "rise to its step count"),
+        (dict(holdout="everything"), "unknown holdout"),
+        (dict(mask_hand_state=False), "must be True"),
+    ],
+)
+def test_an_ablation_cannot_declare_a_plan_the_trainer_cannot_keep(monkeypatch, override, message):
+    monkeypatch.setitem(pipeline.ABLATIONS, "BAD", dict(track="ALL59", **override))
+    with pytest.raises(ContractError, match=message):
+        pipeline.recipe("BAD", manifest()["sha256"])
+
+
+def test_the_hand_mask_hides_the_hand_and_leaves_the_targets_alone():
+    """The arm delta is taken against the arm channels only, so pinning the hand
+    must not move a single target - only what the policy can read."""
+    from examples.hv1.pipeline_config import HandStateMask
+    from examples.hv1.pipeline_config import hand_indices
+    from examples.hv1.transforms import HV1Inputs
+
+    profile = native.profile()
+    indices = hand_indices(profile["state"]["names"])
+    assert indices == tuple(range(7, 15))
+    mask = HandStateMask(indices=indices, values=tuple([0.25] * 8))
+    state = np.arange(15, dtype=np.float32) / 10
+    action = np.tile(np.arange(8, dtype=np.float32) / 10, (15, 1))
+    images = {camera: np.zeros((224, 224, 3), np.uint8) for camera in CAMERAS}
+    sample = {"state": state, "actions": action, "images": images}
+
+    clean = HV1Inputs(profile)(dict(sample))
+    masked = HV1Inputs(profile)(mask(dict(sample)))
+    np.testing.assert_allclose(np.asarray(masked["state"])[7:15], 0.25)
+    np.testing.assert_allclose(np.asarray(masked["state"])[:7], np.asarray(clean["state"])[:7])
+    np.testing.assert_allclose(np.asarray(masked["actions"]), np.asarray(clean["actions"]))
+    # Two frames with different hands now look the same to the policy.
+    other = dict(sample, state=state + np.r_[np.zeros(7), np.ones(8)].astype(np.float32))
+    np.testing.assert_array_equal(mask(other)["state"], mask(dict(sample))["state"])
+    np.testing.assert_allclose(sample["state"], state)  # the input itself is not edited in place
+
+
+def test_the_hand_mask_reaches_training_and_evaluation_alike():
+    """`configure` builds the config the trainer and every evaluator use, so the
+    mask belongs there - unlike state noise, which only training may see."""
+    pytest.importorskip("openpi.transforms")
+    import dataclasses
+
+    from examples.hv1.pipeline_config import HandStateMask
+    from examples.hv1.pipeline_config import _hand_masked
+    from openpi import transforms
+
+    @dataclasses.dataclass(frozen=True)
+    class Data:
+        data_transforms: object
+
+    mask = HandStateMask(indices=(7,), values=(0.0,))
+    data = Data(data_transforms=lambda model: transforms.Group(inputs=("inner",), outputs=("out",)))
+    group = _hand_masked(data, mask).data_transforms(None)
+    assert group.inputs == (mask, "inner")
+    assert group.outputs == ("out",)
+    source = Path(native.__file__).with_name("pipeline_config.py").read_text(encoding="utf-8")
+    assert 'recipe.get("mask_hand_state")' in source
