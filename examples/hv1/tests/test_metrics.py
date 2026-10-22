@@ -6,9 +6,11 @@ import numpy as np
 import pytest
 
 from examples.hv1.artifacts import ContractError
+from examples.hv1.metrics import close_anticipation
 from examples.hv1.metrics import condition_intents
 from examples.hv1.metrics import cross_modal_matrix
 from examples.hv1.metrics import demo_geometry
+from examples.hv1.metrics import knn_chunk_baseline
 from examples.hv1.metrics import transition_metrics
 
 HORIZON = 15
@@ -152,3 +154,92 @@ def test_demo_geometry_refuses_malformed_input():
         demo_geometry(np.zeros((2, 3)), np.ones((2, 3)))
     with pytest.raises(ContractError):
         demo_geometry(np.zeros((3, 3)), np.zeros((3, 3)))
+
+
+def episode_chunks(frames, rise_at):
+    """One chunk per frame; `rise_at(frame)` gives the chunk step where intent turns on, or None."""
+    out = np.zeros((frames, HORIZON, 8))
+    for frame in range(frames):
+        step = rise_at(frame)
+        if step is not None and step < HORIZON:
+            out[frame, step:, 7] = 1.0
+    return out
+
+
+def test_a_policy_that_plans_the_close_anticipates_it():
+    # Every chunk before g=40 already places the close exactly on g.
+    chunks = episode_chunks(60, lambda frame: max(40 - frame, 0))
+    result = close_anticipation(chunks, 40, window=10)
+    assert result["anticipated_fraction"] == 1.0
+    assert result["earliest_lead_frames"] == 10
+    assert result["timing_error_frames_median"] == 0.0
+
+
+def test_a_policy_that_copies_the_closed_hand_never_anticipates():
+    """ALL59: intent turns on only once the fingers have started closing, from g+1."""
+    chunks = episode_chunks(60, lambda frame: 0 if frame > 40 else None)
+    result = close_anticipation(chunks, 40, window=10)
+    assert result["anticipated_fraction"] == 0.0
+    assert result["earliest_lead_frames"] == 0
+    assert result["timing_error_frames_median"] is None
+    assert result["predicted_close_frames"] == [None] * 10
+
+
+def test_a_close_planned_too_late_is_not_counted():
+    chunks = episode_chunks(60, lambda frame: 40 + 5 - frame if frame < 40 else 0)
+    result = close_anticipation(chunks, 40, window=10, tolerance=3)
+    assert result["anticipated_fraction"] == 0.0
+    assert result["timing_error_frames_median"] == 5.0
+
+
+def test_anticipation_window_stops_at_the_first_frame():
+    chunks = episode_chunks(20, lambda frame: 3 - frame if frame < 3 else 0)
+    result = close_anticipation(chunks, 3, window=15)
+    assert result["query_frames"] == [0, 1, 2]
+    assert result["anticipated_fraction"] == 1.0
+
+
+@pytest.mark.parametrize("close_frame", [0, 60])
+def test_anticipation_refuses_a_close_it_cannot_ask_about(close_frame):
+    with pytest.raises(ContractError, match="close_frame"):
+        close_anticipation(np.zeros((60, HORIZON, 8)), close_frame)
+
+
+def test_anticipation_refuses_a_chunk_without_the_intent_channel():
+    with pytest.raises(ContractError, match="chunk per frame"):
+        close_anticipation(np.zeros((60, HORIZON, 7)), 30)
+
+
+def test_knn_answers_a_seen_state_with_its_own_chunk():
+    states = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    chunks = np.arange(3)[:, None, None] * np.ones((3, HORIZON, 8))
+    result = knn_chunk_baseline(states, chunks, states[[2, 0]])
+    assert result["neighbours"] == [[2], [0]]
+    np.testing.assert_allclose(result["chunks"][:, 0, 0], [2.0, 0.0])
+    assert result["distance_median"] == 0.0
+
+
+def test_knn_averages_its_neighbours():
+    states = np.array([[0.0], [1.0], [10.0]])
+    chunks = np.array([0.0, 2.0, 100.0])[:, None, None] * np.ones((3, HORIZON, 8))
+    result = knn_chunk_baseline(states, chunks, np.array([[0.4]]), k=2)
+    assert sorted(result["neighbours"][0]) == [0, 1]
+    np.testing.assert_allclose(result["chunks"][0], 1.0)
+
+
+def test_knn_ignores_a_state_dimension_that_never_moves():
+    # The second column is constant in training; a query far off on it must not matter.
+    states = np.array([[0.0, 5.0], [1.0, 5.0]])
+    chunks = np.array([0.0, 1.0])[:, None, None] * np.ones((2, HORIZON, 8))
+    result = knn_chunk_baseline(states, chunks, np.array([[0.9, -100.0]]))
+    assert result["neighbours"] == [[1]]
+    assert np.isfinite(result["distance_median"])
+
+
+def test_knn_refuses_mismatched_inputs():
+    with pytest.raises(ContractError):
+        knn_chunk_baseline(np.zeros((3, 2)), np.zeros((2, HORIZON, 8)), np.zeros((1, 2)))
+    with pytest.raises(ContractError):
+        knn_chunk_baseline(np.zeros((3, 2)), np.zeros((3, HORIZON, 8)), np.zeros((1, 3)))
+    with pytest.raises(ContractError):
+        knn_chunk_baseline(np.zeros((3, 2)), np.zeros((3, HORIZON, 8)), np.zeros((1, 2)), k=4)

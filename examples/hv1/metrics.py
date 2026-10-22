@@ -147,6 +147,83 @@ def cross_modal_matrix(predict, cases):
     }
 
 
+def close_anticipation(chunks, close_frame, *, window=15, tolerance=3, channel=7):
+    """Whether the policy calls the close before the hand shows it.
+
+    `chunks` is the (frames, horizon, dim) chunk predicted at every frame of one
+    episode, teacher-forced on the recorded observations; `channel` is the grasp
+    intent in it. Only the `window` frames before the recorded close at
+    `close_frame` are asked: a chunk there anticipates the close when its intent
+    first crosses 0.5 within `tolerance` frames of it.
+
+    The question exists because transition_metrics cannot tell prediction from
+    reaction. On ALL59 the intent stayed at 0.003-0.033 on the grasp frame and
+    rose only from g+1, once the hand state already showed the fingers closing.
+    That scores as a close a frame late, yet it never decided anything.
+    """
+    chunks = np.asarray(chunks, dtype=np.float64)
+    if chunks.ndim != 3 or chunks.shape[2] <= channel or not len(chunks):
+        raise ContractError("need a (frames, horizon, >channel) chunk per frame")
+    if not 1 <= close_frame < len(chunks):
+        raise ContractError("close_frame must leave at least one frame before it")
+    if not np.isfinite(chunks[..., channel]).all():
+        raise ContractError("intent channel must be finite")
+    queries = list(range(max(0, close_frame - window), close_frame))
+    predicted, errors, hits = [], [], []
+    for frame in queries:
+        rises = np.flatnonzero(chunks[frame, :, channel] >= 0.5)
+        if not len(rises):
+            predicted.append(None)
+            continue
+        called = frame + int(rises[0])
+        predicted.append(called)
+        errors.append(called - close_frame)
+        if abs(called - close_frame) <= tolerance:
+            hits.append(frame)
+    return {
+        "close_frame": int(close_frame),
+        "query_frames": queries,
+        "predicted_close_frames": predicted,
+        "anticipated_fraction": len(hits) / len(queries),
+        "earliest_lead_frames": close_frame - hits[0] if hits else 0,
+        "timing_error_frames_median": float(np.median(errors)) if errors else None,
+        "horizon": int(chunks.shape[1]),
+        "note": "Teacher-forced; a lead is how many frames ahead a chunk already placed the close.",
+    }
+
+
+def knn_chunk_baseline(train_states, train_chunks, query_states, *, k=1):
+    """Answer each query with the chunk recorded at the nearest training state.
+
+    This is the floor for open-loop evaluation. A lookup from arm and hand state
+    to the action that followed it sees no image and no instruction, so a policy
+    that only matches it has learned the state-to-action table and nothing about
+    the scene. States are z-scored with the training spread; a dimension that
+    never moves is ignored rather than divided by zero.
+    """
+    train_states = np.asarray(train_states, dtype=np.float64)
+    train_chunks = np.asarray(train_chunks, dtype=np.float64)
+    query_states = np.asarray(query_states, dtype=np.float64)
+    if train_states.ndim != 2 or query_states.ndim != 2 or train_states.shape[1] != query_states.shape[1]:
+        raise ContractError("need (samples, dim) train and query states of the same width")
+    if train_chunks.ndim != 3 or len(train_chunks) != len(train_states):
+        raise ContractError("need one (horizon, dim) chunk per training state")
+    if not 1 <= k <= len(train_states):
+        raise ContractError("k must be between 1 and the number of training states")
+    spread = train_states.std(axis=0)
+    scale = np.where(spread > 0, spread, np.inf)
+    center = train_states.mean(axis=0)
+    train = (train_states - center) / scale
+    query = (query_states - center) / scale
+    distances = np.linalg.norm(query[:, None, :] - train[None, :, :], axis=2)
+    neighbours = np.argsort(distances, axis=1, kind="stable")[:, :k]
+    return {
+        "chunks": train_chunks[neighbours].mean(axis=1),
+        "neighbours": neighbours.tolist(),
+        "distance_median": float(np.median(np.take_along_axis(distances, neighbours, axis=1))),
+    }
+
+
 def demo_geometry(starts, grasps):
     """How much of a demonstration set a policy can solve without looking.
 
