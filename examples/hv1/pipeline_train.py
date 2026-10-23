@@ -121,12 +121,13 @@ def data_layout(batch_size, batch_axis, fsdp_axis):
     """How one batch lies on a `batch_axis` x `fsdp_axis` device mesh: (axes, constrain).
 
     openpi splits the batch over every device and pins activations to that split.
-    The recipe keeps batch 2, and a 40 GB card needs the model over 4+ cards, so
-    there the batch is split over the batch axis only and replicated along FSDP,
-    with the activation pins off (they assume the full split). Where the full
-    split works - the 2-card A6000 run - nothing changes.
+    Once the model is sharded (FSDP > 1) the batch is split over the batch axis only
+    and replicated along FSDP, with the pins off. That split was wrong here: on the
+    2-card A6000 (batch 2, one sample per card) it gave step-1 loss 0.475 on every
+    run and NaN twice, while the replicated layout gave 0.310 on the same cards and
+    0.311 on 4 A100s. Without FSDP nothing changes.
     """
-    if batch_size % (batch_axis * fsdp_axis) == 0:
+    if fsdp_axis == 1:
         return "data", True
     if batch_size % batch_axis == 0:
         return "batch", False

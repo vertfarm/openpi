@@ -720,18 +720,19 @@ def test_fsdp_devices_refuses_a_count_it_cannot_shard_over(monkeypatch, value):
     ("batch_axis", "fsdp_axis", "expected"),
     [
         (1, 1, ("data", True)),
-        (1, 2, ("data", True)),
         (2, 1, ("data", True)),
+        (1, 2, ("batch", False)),
         (1, 4, ("batch", False)),
         (1, 8, ("batch", False)),
         (2, 4, ("batch", False)),
     ],
 )
 def test_data_layout_keeps_batch_two_on_any_card_count(batch_axis, fsdp_axis, expected):
-    """Batch 2 is part of the recipe. A 40 GB card needs the model over 4+ cards, so
-    the batch cannot be split over every device; it is split over the batch axis and
-    replicated along FSDP. Where the full split already works (the 2-card A6000 run),
-    the layout is unchanged."""
+    """Batch 2 is part of the recipe. Once the model is sharded (FSDP > 1) the batch
+    is split over the batch axis only and replicated along FSDP, even where a full
+    split would divide: on the 2-card A6000 the full split with activation pins gave
+    step-1 loss 0.475 every run, while the replicated layout gave 0.310 there and
+    0.311 on 4 A100s. Without FSDP nothing changes."""
     from examples.hv1.pipeline_train import data_layout
 
     assert data_layout(2, batch_axis, fsdp_axis) == expected
