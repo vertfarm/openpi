@@ -44,9 +44,14 @@
   시작된 뒤 Grasp action 결과를 받기 전에는 open을 보내지 않고, guardian의
   release 허가가 올 때까지 해제를 보류한다. 유지시간은 저장된 시계열 스윕 결과를
   감독자가 검토해 선택하며 기본 0.2초를 실기 승인값으로 간주하지 않는다.
-- 서버는 학습 통계의 hand state q01/q99에 축별 0.05 rad 절대 여유를 둔 준비자세
-  envelope를 `/health`로 제공한다. client와 server가 모두 이를 검사하며, 학습 때의
-  mode 2 + open 0.6 준비자세와 크게 다른 raw-home 입력은 clipping 없이 거부한다.
+- 서버는 snapshot이 학습한 에피소드 전체 프레임의 hand state **min/max**에 축별 0.05 rad
+  절대 여유를 둔 envelope(`basis: training_min_max`)를 `/health`로 제공한다(G4, 2026-10-24).
+  client와 server가 모두 이를 검사하며, 학습 때의 mode 2 + open 0.6 준비자세와 크게 다른
+  raw-home 입력은 clipping 없이 거부한다. 이전 q01/q99 기준은 닫힌 파지 plateau의 꼬리를
+  잘라 학습에 있던 정상 파지도 거부했다. 서버 host에 캠페인 원본 녹화가 있어야 한다.
+- grasp intent는 앙상블하지 않는다(G3, 2026-10-24). 팔 7축은 같은 순간의 모든 예측을
+  가중 평균하지만, intent는 그 순간의 가장 새 예측 값을 쓴다. 0/1 값을 평균하면 0.5 근처에서
+  머물러 close가 늦었다.
 - `/health`의 `adapter_core_sha256`은 서버가 읽은 `core.py`와 ROS 실행 사본을
   byte 단위로 묶는다. 불일치하면 시작을 거부한다. 데이터 계약 해시만 일치하는 것은
   실행 코드가 같다는 증거가 아니다.
@@ -72,6 +77,28 @@ CAMPAIGN=~/workspace/hv1-vla-runtime/two-track-20260910-r3
 ```
 
 `--registry`는 필수다(2026-09-11). C/F-5000만 허용했던 legacy 분기는 삭제했다.
+
+**녹화 open-loop 재생(2026-10-24).** 모델 대신 캠페인 에피소드의 녹화 action을 같은 서버
+계약으로 내보낸다. node·queue·gate는 정책과 같은 경로를 지난다. 그래서 배포 경로와
+"데이터가 가르칠 수 있는가"(그리퍼가 제때 닫히는가)를 정책보다 먼저 확인할 수 있다.
+
+```bash
+.venv/bin/python -B -m examples.hv1.deploy_server --campaign "$CAMPAIGN" --replay-episode <episode_id>
+```
+
+- `/health`에는 `source: recorded_episode`, `denoise: null`이 표시되고, `snapshot_sha256`은
+  그 녹화 `data.hdf5`의 해시다. live node는 field profile의 `snapshot_sha256`이 이 값과
+  같을 때만 움직인다. 재생도 감독자가 녹화 해시를 profile에 적어 승인해야 한다.
+- node는 요청마다 arm 관측 시각(`anchor`)과 armed run 표시(`run`, shadow에서는 null)를 보낸다.
+  chunk의 i번째 샘플은 녹화 자체 timestamp에서 `anchor - 첫 anchor + i/30` 시점의 행이다.
+  queue가 모델 chunk를 읽는 방식과 같다. 끝을 지나면 마지막 행을 유지한다.
+- 새 armed run(shadow → ARM, node 재시작), anchor 역행, 0.5 s 넘는 요청 공백이 생기면 행 0부터
+  다시 시작한다. 그래서 shadow를 먼저 돌려도 ARM 뒤 재생은 녹화 처음부터 시작한다.
+- 녹화와 envelope 계산에 쓰는 모든 `data.hdf5`는 캠페인 `source_hashes`와 대조한다. 다르면 거부한다.
+  재생 envelope는 진단 ep를 포함한 캠페인 전체 ep의 min/max다.
+- 시작 자세는 녹화 첫 행과 같아야 한다(`tools/return_to_start.py`). shadow로 먼저 돌린다.
+- `--replay-episode`에 `--registry`를 같이 주면 거부한다. 재생을 묶는 것은 registry가 아니라
+  field profile이 적은 녹화 해시다.
 
 서버는 127.0.0.1:8000에만 bind한다. /health에 snapshot/stat/contract 해시가 있다.
 GPU lock을 유지해 다른 학습/평가와 충돌하지 않는다. 이미 실행 중이면 중복 시작하지 않는다.

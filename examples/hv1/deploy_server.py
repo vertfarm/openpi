@@ -29,6 +29,101 @@ from .ros.keti_humanoid_inference.keti_humanoid_inference.core import vector
 REGISTRY_SCHEMA = "hv1_two_track_v1"
 
 
+def training_hand_range(states):
+    """Per-channel min and max of the hand state over every given training frame."""
+    from .artifacts import ContractError
+
+    hands = [np.asarray(state, dtype=np.float64)[:, 7:] for state in states]
+    if not hands or any(hand.ndim != 2 or hand.shape[1] != 8 or not len(hand) for hand in hands):
+        raise ContractError("hand range needs non-empty 15-wide training states")
+    frames = np.concatenate(hands)
+    return frames.min(axis=0), frames.max(axis=0)
+
+
+def verified_recording(episode):
+    """The episode's `data.hdf5`, refused unless it still hashes to the campaign's record."""
+    from .artifacts import file_hash
+
+    recording = Path(episode["path"]) / "data.hdf5"
+    try:
+        digest = file_hash(recording)
+    except OSError as error:
+        raise Rejected(f"recording unreadable: {episode['id']}") from error
+    if digest != episode.get("source_hashes", {}).get("data.hdf5"):
+        raise Rejected(f"recording differs from the campaign record: {episode['id']}")
+    return recording, digest
+
+
+def hand_envelope(campaign, episode_ids):
+    """The G4 gate: min/max over the episodes the served actions come from.
+
+    Each recording is checked against the campaign's source hash first, so an
+    edited or swapped file cannot move the bound.
+    """
+    from . import native
+    from . import pipeline
+    from .artifacts import ContractError
+
+    manifest = pipeline.verify_campaign(campaign)
+    episodes = [episode for episode in manifest["episodes"] if episode["id"] in episode_ids]
+    if len(episodes) != len(set(episode_ids)):
+        raise Rejected("hand envelope episodes are not all in the campaign")
+    try:
+        states = [
+            native.read_numeric(verified_recording(episode)[0], allow_multiple_cycles=True)[0] for episode in episodes
+        ]
+        low, high = training_hand_range(states)
+    except ContractError as error:
+        raise Rejected(f"hand envelope: {error}") from error
+    return {
+        "names": list(HAND_STATE),
+        "basis": "training_min_max",
+        "low": low.tolist(),
+        "high": high.tolist(),
+        "margin_rad": HAND_ENVELOPE_MARGIN_RAD,
+    }
+
+
+class RecordedEpisode:
+    """Serve a recorded episode's own actions in place of a model.
+
+    Open-loop replay. Each chunk is aligned the way the node's queue reads a
+    model's: sample i is the recording row at `anchor - first_anchor + i/30`,
+    looked up on the recording's own timestamps, held at the last row past the
+    end. The node, queue and gates downstream are the ones a policy goes
+    through, so this checks the deployment path - and that the data teaches
+    what it should - before any policy is trusted.
+
+    Row 0 restarts whenever a new armed run begins (`run` changes: shadow to
+    ARM, or a restarted node), the anchor goes backwards, or requests pause for
+    more than `RESTART_GAP_S`.
+    """
+
+    RESTART_GAP_S = 0.5
+
+    def __init__(self, actions, timestamps):
+        self.actions = np.asarray(actions, dtype=np.float32)
+        times = np.asarray(timestamps, dtype=np.float64)
+        if self.actions.ndim != 2 or self.actions.shape[1] != 8 or not np.isfinite(self.actions).all():
+            raise Rejected("recorded actions must be finite N x 8")
+        if times.shape != (len(self.actions),) or np.any(np.diff(times) <= 0):
+            raise Rejected("recorded timestamps must increase, one per action row")
+        self.times = times - times[0]
+        self.first = self.last = self.run = None
+
+    def infer(self, obs):
+        anchor, run = obs.get("anchor"), obs.get("run")
+        if anchor is None or not np.isfinite(anchor):
+            raise Rejected("replay needs the observation anchor")
+        anchor = float(anchor)
+        if self.last is None or run != self.run or anchor < self.last or anchor - self.last > self.RESTART_GAP_S:
+            self.first, self.run = anchor, run
+        self.last = anchor
+        when = anchor - self.first + np.arange(CONTRACT["horizon"]) / CONTRACT["hz"]
+        rows = np.clip(np.searchsorted(self.times, when + 1e-9, side="right") - 1, 0, len(self.actions) - 1)
+        return {"actions": self.actions[rows]}
+
+
 def prepare_images(payload):
     """Match recorder geometry and official OpenPI PIL preprocessing.
 
@@ -86,13 +181,10 @@ def load_snapshot(campaign, snapshot, denoise=10, *, registry=None):
     lock = FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0)
     lock.acquire()
     try:
-        data_config = config.data.create(config.assets_dirs, config.model)
-        state_stats = None if data_config.norm_stats is None else data_config.norm_stats.get("state")
-        if state_stats is None or state_stats.q01 is None or state_stats.q99 is None:
-            raise Rejected("state quantile statistics missing")
-        q01, q99 = np.asarray(state_stats.q01), np.asarray(state_stats.q99)
-        if q01.shape != (15,) or q99.shape != (15,):
-            raise Rejected("state quantile statistics have wrong shape")
+        from . import pipeline
+
+        manifest = pipeline.verify_campaign(campaign)
+        envelope = hand_envelope(campaign, pipeline.training_ids(manifest, record["recipe"]))
         from openpi.policies.policy_config import create_trained_policy
 
         policy = create_trained_policy(config, snapshot, default_prompt=PROMPT, sample_kwargs={"num_steps": denoise})
@@ -120,15 +212,50 @@ def load_snapshot(campaign, snapshot, denoise=10, *, registry=None):
         "denoise": denoise,
         "camera_dropout": False,
         "norm_stats_sha256": config.policy_metadata["norm_stats_sha256"],
-        "hand_state_envelope": {
-            "names": list(HAND_STATE),
-            "q01": q01[7:].tolist(),
-            "q99": q99[7:].tolist(),
-            "margin_rad": HAND_ENVELOPE_MARGIN_RAD,
-        },
+        "hand_state_envelope": envelope,
         "robot_commands_sent": 0,
     }
     return policy, meta, lock
+
+
+def load_replay(campaign, episode_id):
+    """A recorded campaign episode as the policy, for an open-loop replay.
+
+    The envelope spans every campaign episode, held-out diagnostics included:
+    a replay serves a recording, not a model trained on a subset.
+    """
+    from . import native
+    from . import pipeline
+    from .artifacts import ContractError
+
+    campaign = Path(campaign).resolve()
+    manifest = pipeline.verify_campaign(campaign)
+    episodes = {episode["id"]: episode for episode in manifest["episodes"]}
+    if episode_id not in episodes:
+        raise Rejected("replay episode is not in the campaign")
+    # Hash before reading, so the served rows are the bytes the profile names.
+    recording, digest = verified_recording(episodes[episode_id])
+    try:
+        _, actions, info = native.read_numeric(recording, allow_multiple_cycles=True)
+    except ContractError as error:
+        raise Rejected(f"replay recording: {error}") from error
+    meta = {
+        "ready": True,
+        "source": "recorded_episode",
+        "contract": CONTRACT,
+        "contract_sha256": CONTRACT_SHA,
+        "adapter_core_sha256": CORE_SOURCE_SHA256,
+        "episode": episode_id,
+        # The live node only runs what its field profile names: replaying needs
+        # a profile that names this recording, never a model's.
+        "snapshot_sha256": digest,
+        "action_horizon": 15,
+        "denoise": None,
+        "camera_dropout": False,
+        "hand_state_envelope": hand_envelope(campaign, set(episodes)),
+        "robot_commands_sent": 0,
+    }
+    return RecordedEpisode(actions, info["row_timestamp_seconds"]), meta
 
 
 def make_handler(policy, metadata):
@@ -179,7 +306,10 @@ def make_handler(policy, metadata):
                 validate_hand_envelope(state[7:], metadata)
                 images = prepare_images(payload)
                 prepared = time.perf_counter()
-                actions = np.asarray(policy.infer({"state": state, "images": images, "prompt": PROMPT})["actions"])
+                obs = {"state": state, "images": images, "prompt": PROMPT}
+                if metadata.get("source") == "recorded_episode":
+                    obs.update(anchor=payload.get("anchor"), run=payload.get("run"))
+                actions = np.asarray(policy.infer(obs)["actions"])
                 if actions.shape != (15, 8) or not np.isfinite(actions).all():
                     raise Rejected("invalid model output")
                 self.reply(
@@ -211,14 +341,24 @@ def make_handler(policy, metadata):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", required=True)
-    parser.add_argument("--snapshot", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--snapshot")
+    source.add_argument("--replay-episode", help="serve this campaign episode's recorded actions, open-loop")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--registry", required=True, help="Hash-bound SHADOW_ONLY registry; never auto-arms ROS")
+    parser.add_argument("--registry", help="Hash-bound SHADOW_ONLY registry; never auto-arms ROS")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be 1024..65535")
-    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-    policy, meta, lock = load_snapshot(args.campaign, args.snapshot, registry=args.registry)
+    if args.snapshot and not args.registry:
+        parser.error("--snapshot requires --registry")
+    if args.replay_episode and args.registry:
+        parser.error("--replay-episode does not use a registry; the field profile names the recording")
+    if args.replay_episode:
+        policy, meta = load_replay(args.campaign, args.replay_episode)
+        lock = None
+    else:
+        os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+        policy, meta, lock = load_snapshot(args.campaign, args.snapshot, registry=args.registry)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(policy, meta))
     print(json.dumps(meta), flush=True)
     try:
@@ -227,7 +367,8 @@ def main():
         pass
     finally:
         server.server_close()
-        lock.release()
+        if lock is not None:
+            lock.release()
 
 
 if __name__ == "__main__":

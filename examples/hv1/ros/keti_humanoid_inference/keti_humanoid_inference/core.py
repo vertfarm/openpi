@@ -74,37 +74,49 @@ def validate_metadata(meta):
         raise Rejected("server contract mismatch")
     if meta.get("ready") is not True or meta.get("action_horizon") != 15:
         raise Rejected("server not ready / wrong horizon")
-    if not meta.get("snapshot_sha256") or meta.get("denoise") != 10:
+    # A recorded episode replayed open-loop has no sampler; anything else is a model.
+    replay = meta.get("source") == "recorded_episode" and meta.get("denoise") is None
+    if not meta.get("snapshot_sha256") or not (replay or meta.get("denoise") == 10):
         raise Rejected("unqualified snapshot / sampling settings")
     if meta.get("adapter_core_sha256") != CORE_SOURCE_SHA256:
         raise Rejected("server/ROS adapter core source mismatch")
     envelope = meta.get("hand_state_envelope")
     if not isinstance(envelope, dict) or envelope.get("names") != list(HAND_STATE):
         raise Rejected("missing hand-state training envelope")
-    q01, q99 = vector(envelope.get("q01"), 8), vector(envelope.get("q99"), 8)
+    if envelope.get("basis") != "training_min_max":
+        raise Rejected("hand-state training envelope must span the training min/max")
+    low, high = vector(envelope.get("low"), 8), vector(envelope.get("high"), 8)
     margin = float(envelope.get("margin_rad", float("nan")))
-    if np.any(q01 > q99) or not math.isfinite(margin) or not 0 < margin <= 0.2:
+    if np.any(low > high) or not math.isfinite(margin) or not 0 < margin <= 0.2:
         raise Rejected("invalid hand-state training envelope")
 
 
 def validate_hand_envelope(hand, metadata):
-    """Reject grossly out-of-distribution hand preparation without clipping it."""
+    """Reject grossly out-of-distribution hand preparation without clipping it.
+
+    The bounds are the min/max over every training frame (G4). The 1st-99th
+    percentiles used before cut the tails of the closed-grasp plateau, so the
+    gate refused hand states the policy had been trained on - normal grasps.
+    """
     values = vector(hand, 8)
     envelope = metadata.get("hand_state_envelope", {})
-    if envelope.get("names") != list(HAND_STATE):
+    if envelope.get("names") != list(HAND_STATE) or envelope.get("basis") != "training_min_max":
         raise Rejected("hand-state envelope identity mismatch")
-    q01, q99 = vector(envelope.get("q01"), 8), vector(envelope.get("q99"), 8)
+    low, high = vector(envelope.get("low"), 8), vector(envelope.get("high"), 8)
     margin = float(envelope.get("margin_rad", float("nan")))
     if not math.isfinite(margin) or not 0 < margin <= 0.2:
         raise Rejected("invalid hand-state envelope margin")
-    outside = np.flatnonzero((values < q01 - margin) | (values > q99 + margin))
+    outside = np.flatnonzero((values < low - margin) | (values > high + margin))
     if len(outside):
         names = ",".join(HAND_STATE[index] for index in outside)
         raise Rejected(f"hand state outside training envelope: {names}")
     return values
 
 
-def make_request(sequence, state, images):
+def make_request(sequence, state, images, anchor=None, run=None):
+    """`anchor` is the arm-observation time the chunk is aligned to; `run` marks
+    one armed run (None in shadow). A model ignores both; an open-loop replay
+    uses them to pick recording rows and to restart from row 0."""
     if set(images) != set(CAMERAS):
         raise Rejected("all three cameras required")
     packed = {}
@@ -112,6 +124,10 @@ def make_request(sequence, state, images):
         if not isinstance(payload, bytes) or not 0 < len(payload) <= 2_000_000:
             raise Rejected("invalid compressed image")
         packed[name] = base64.b64encode(payload).decode("ascii")
+    if anchor is not None and not math.isfinite(anchor):
+        raise Rejected("nonfinite observation anchor")
+    if run is not None and not math.isfinite(run):
+        raise Rejected("nonfinite run marker")
     return {
         "contract_sha256": CONTRACT_SHA,
         "sequence": sequence,
@@ -119,6 +135,8 @@ def make_request(sequence, state, images):
         "images": packed,
         "image_encoding": "ros_compressed",
         "prompt": PROMPT,
+        "anchor": None if anchor is None else float(anchor),
+        "run": None if run is None else float(run),
     }
 
 
@@ -226,6 +244,11 @@ class ChunkQueue:
     `ensemble_decay` at zero the average is uniform; raising it discounts older
     predictions; a very large value reduces to executing the newest alone,
     which is the behaviour this replaced.
+
+    The grasp intent (last channel) is not averaged (G3). It is a 0/1 switch: a
+    blend of older "open" and newer "close" predictions sat near 0.5 through the
+    hand-over and held the close back past the dwell. It takes the newest
+    prediction of the instant instead.
     """
 
     period = 1.0 / 30
@@ -317,12 +340,12 @@ class ChunkQueue:
             ages = np.arange(len(votes) - 1, -1, -1, dtype=np.float64)
             weight = np.exp(-self.decay * ages)
             action = np.average([v for _, v in votes], axis=0, weights=weight / weight.sum())
+            action[7] = votes[-1][1][7]
             if self.last_meta is not None:
                 # Every prediction that moved this sample has to have been
                 # qualified, not just the newest: the executed value is a blend
                 # of all of them and belongs to none.
-                self.last_meta = {**self.last_meta, "proposal_ids": [pid for pid, _ in votes],
-                                  "ensembled": len(votes)}
+                self.last_meta = {**self.last_meta, "proposal_ids": [pid for pid, _ in votes], "ensembled": len(votes)}
         return due, action
 
 

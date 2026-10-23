@@ -2,13 +2,17 @@
 
 import base64
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 import threading
 
 import numpy as np
 import pytest
 
+from examples.hv1.artifacts import ContractError
 from examples.hv1.deploy_server import REGISTRY_SCHEMA
+from examples.hv1.deploy_server import RecordedEpisode
 from examples.hv1.deploy_server import make_handler
+from examples.hv1.deploy_server import training_hand_range
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import ARM_STATE
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import CAMERAS
 from examples.hv1.ros.keti_humanoid_inference.keti_humanoid_inference.core import CONTRACT
@@ -38,7 +42,13 @@ def metadata():
         denoise=10,
         snapshot_sha256="test-snapshot",
         adapter_core_sha256=CORE_SOURCE_SHA256,
-        hand_state_envelope={"names": list(HAND_STATE), "q01": [-1.0] * 8, "q99": [1.0] * 8, "margin_rad": 0.05},
+        hand_state_envelope={
+            "names": list(HAND_STATE),
+            "basis": "training_min_max",
+            "low": [-1.0] * 8,
+            "high": [1.0] * 8,
+            "margin_rad": 0.05,
+        },
     )
 
 
@@ -119,8 +129,9 @@ def test_hand_envelope_allows_prepared_pose_but_rejects_home():
     value = metadata()
     value["hand_state_envelope"] = {
         "names": list(HAND_STATE),
-        "q01": [1.549, -0.618, 0.828, -0.618, 0.828, 1.550, -0.617, 0.829],
-        "q99": [1.577, -0.607, 0.835, -0.605, 0.835, 1.554, -0.609, 0.832],
+        "basis": "training_min_max",
+        "low": [1.549, -0.618, 0.828, -0.618, 0.828, 1.550, -0.617, 0.829],
+        "high": [1.577, -0.607, 0.835, -0.605, 0.835, 1.554, -0.609, 0.832],
         "margin_rad": 0.05,
     }
     prepared = [1.560, -0.612, 0.831, -0.612, 0.831, 1.543, -0.612, 0.831]
@@ -348,3 +359,197 @@ def test_live_image_matches_recorder_geometry_and_rgb():
         np.testing.assert_array_equal(image, expected)
         assert image.shape == (224, 224, 3) and image.dtype == np.uint8
         assert image[28, 0, 0] == 200 and image[0].max() == 0
+
+
+def test_grasp_intent_is_the_newest_prediction_not_a_blend():
+    """G3: arm joints are averaged over every prediction of an instant, but the
+    binary grasp intent is not - a blend of an old "open" and a new "close" sat
+    near 0.5 and delayed the close past the dwell."""
+    queue = ChunkQueue(ensemble_decay=0.0)
+    old, new = np.zeros((15, 8)), np.ones((15, 8))
+    old[:, 7], new[:, 7] = 0.0, 1.0
+    queue.offer(old, 10.0, 10.0)
+    queue.offer(new, 10.1, 10.1)
+    for _ in range(3):
+        queue.pop(queue.queue[0][0])
+    _, action = queue.pop(queue.queue[0][0])
+    np.testing.assert_allclose(action[:7], 0.5)
+    assert action[7] == 1.0
+
+
+def test_training_hand_range_spans_every_training_frame():
+    """G4: the gate admits everything the policy was trained on. Percentiles cut
+    the grasp plateau's tails and the gate refused normal grasps."""
+    states = [np.zeros((3, 15)), np.ones((2, 15))]
+    states[0][1, 7:] = -0.3
+    states[1][0, 14] = 1.7
+    low, high = training_hand_range(states)
+    np.testing.assert_allclose(low, [-0.3] * 8)
+    np.testing.assert_allclose(high, [1.0] * 7 + [1.7])
+    envelope = {
+        "names": list(HAND_STATE),
+        "basis": "training_min_max",
+        "low": low.tolist(),
+        "high": high.tolist(),
+        "margin_rad": 0.05,
+    }
+    value = {**metadata(), "hand_state_envelope": envelope}
+    for frame in np.concatenate(states):
+        validate_hand_envelope(frame[7:], value)
+    with pytest.raises(Rejected, match="joint_32"):
+        validate_hand_envelope([1.0] * 7 + [1.76], value)
+    with pytest.raises(ContractError):
+        training_hand_range([])
+
+
+def test_metadata_requires_the_min_max_envelope_basis():
+    bad = metadata()
+    bad["hand_state_envelope"] = {**bad["hand_state_envelope"], "basis": "q01_q99"}
+    with pytest.raises(Rejected, match="training envelope"):
+        validate_metadata(bad)
+
+
+def test_recorded_episode_aligns_rows_to_the_observation_anchor():
+    """Open-loop replay serves the recording's actions through the same server,
+    queue and gates as a model. Sample i of a chunk is the recording row at
+    anchor + i/30 on the recording's own clock, as the queue reads a model chunk."""
+    actions = np.arange(40 * 8, dtype=np.float32).reshape(40, 8)
+    times = np.arange(40) / 30 + 100.0
+    times[20:] += 0.05  # a recorder gap: rows after it are 0.05 s later
+    episode = RecordedEpisode(actions, times)
+    episode.RESTART_GAP_S = 10.0  # this test jumps ahead; restarts are tested below
+    np.testing.assert_array_equal(episode.infer({"anchor": 7.0})["actions"], actions[:15])
+    np.testing.assert_array_equal(episode.infer({"anchor": 7.1})["actions"][0], actions[3])
+    late = episode.infer({"anchor": 7.0 + 25 / 30 + 0.05})["actions"]
+    np.testing.assert_array_equal(late[0], actions[25])
+    tail = episode.infer({"anchor": 8.4})["actions"]
+    assert np.all(tail == actions[39])
+
+
+@pytest.mark.parametrize(
+    "second",
+    [{"anchor": 9.0, "run": None}, {"anchor": 7.2, "run": 7.15}, {"anchor": 6.0, "run": None}],
+    ids=["pause", "armed run", "backwards"],
+)
+def test_recorded_episode_restarts_from_row_zero_on_a_new_run(second):
+    """Shadow requests must not use up the recording before ARM: a new armed
+    run, a pause or a restarted node starts again at row 0."""
+    actions = np.arange(40 * 8, dtype=np.float32).reshape(40, 8)
+    episode = RecordedEpisode(actions, np.arange(40) / 30)
+    episode.infer({"anchor": 7.0, "run": None})
+    episode.infer({"anchor": 7.1, "run": None})
+    np.testing.assert_array_equal(episode.infer(second)["actions"], actions[:15])
+
+
+def test_recorded_episode_needs_the_anchor():
+    episode = RecordedEpisode(np.zeros((5, 8)), np.arange(5) / 30)
+    with pytest.raises(Rejected, match="anchor"):
+        episode.infer({})
+    with pytest.raises(Rejected, match="timestamps"):
+        RecordedEpisode(np.zeros((5, 8)), np.zeros(5))
+
+
+def test_request_carries_anchor_and_run():
+    images = {c: b"jpg" for c in CAMERAS}
+    request = make_request(3, np.zeros(15), images, 12.5, 11.0)
+    assert request["anchor"] == 12.5 and request["run"] == 11.0
+    assert make_request(3, np.zeros(15), images)["anchor"] is None
+    with pytest.raises(Rejected):
+        make_request(3, np.zeros(15), images, float("nan"))
+
+
+def test_grasp_intent_takes_the_newest_of_three_predictions():
+    queue = ChunkQueue(ensemble_decay=0.0)
+    for anchor, intent in ((10.0, 0.0), (10.1, 1.0), (10.2, 0.0)):
+        chunk = np.zeros((15, 8))
+        chunk[:, 7] = intent
+        queue.offer(chunk, anchor, anchor)
+    while len(queue.queue) > 3:
+        queue.pop(queue.queue[0][0])
+    _, action = queue.pop(queue.queue[0][0])
+    assert action[7] == 0.0
+
+
+def fake_campaign(monkeypatch, tmp_path, hands, *, tamper=None):
+    """A campaign whose episodes are tiny recordings with the given hand states."""
+    from examples.hv1.artifacts import file_hash
+    import examples.hv1.native as native
+    import examples.hv1.pipeline as pipeline
+
+    episodes = []
+    for index, hand in enumerate(hands):
+        directory = tmp_path / f"ep{index}"
+        directory.mkdir()
+        (directory / "data.hdf5").write_bytes(f"recording {index}".encode())
+        episodes.append(
+            {
+                "id": f"ep{index}",
+                "path": str(directory),
+                "source_hashes": {"data.hdf5": file_hash(directory / "data.hdf5")},
+            }
+        )
+    if tamper is not None:
+        (Path(episodes[tamper]["path"]) / "data.hdf5").write_bytes(b"edited")
+    by_path = {str(Path(e["path"]) / "data.hdf5"): np.asarray(h, dtype=np.float64) for e, h in zip(episodes, hands)}
+
+    def read_numeric(path, allow_multiple_cycles=False):
+        hand = by_path[str(path)]
+        state = np.concatenate((np.zeros((len(hand), 7)), hand), axis=1)
+        action = np.zeros((len(hand), 8))
+        return state, action, {"row_timestamp_seconds": (np.arange(len(hand)) / 30).tolist()}
+
+    monkeypatch.setattr(pipeline, "verify_campaign", lambda campaign, raw=False: {"episodes": episodes})
+    monkeypatch.setattr(native, "read_numeric", read_numeric)
+    return episodes
+
+
+def test_hand_envelope_reads_only_the_named_verified_recordings(monkeypatch, tmp_path):
+    from examples.hv1.deploy_server import hand_envelope
+
+    fake_campaign(monkeypatch, tmp_path, [np.zeros((2, 8)), np.ones((2, 8)), np.full((2, 8), 5.0)])
+    envelope = hand_envelope(tmp_path, {"ep0", "ep1"})
+    assert envelope["basis"] == "training_min_max"
+    assert envelope["low"] == [0.0] * 8 and envelope["high"] == [1.0] * 8
+    with pytest.raises(Rejected, match="not all in the campaign"):
+        hand_envelope(tmp_path, {"ep0", "missing"})
+
+
+def test_hand_envelope_refuses_an_edited_recording(monkeypatch, tmp_path):
+    from examples.hv1.deploy_server import hand_envelope
+
+    fake_campaign(monkeypatch, tmp_path, [np.zeros((2, 8)), np.ones((2, 8))], tamper=1)
+    with pytest.raises(Rejected, match="differs from the campaign record"):
+        hand_envelope(tmp_path, {"ep0", "ep1"})
+
+
+def test_load_replay_binds_the_served_rows_to_the_recording_hash(monkeypatch, tmp_path):
+    from examples.hv1.deploy_server import load_replay
+
+    episodes = fake_campaign(monkeypatch, tmp_path, [np.zeros((3, 8)), np.ones((3, 8))])
+    policy, meta = load_replay(tmp_path, "ep1")
+    assert meta["source"] == "recorded_episode" and meta["denoise"] is None
+    assert meta["snapshot_sha256"] == episodes[1]["source_hashes"]["data.hdf5"]
+    validate_metadata(meta)
+    assert policy.infer({"anchor": 1.0})["actions"].shape == (15, 8)
+    with pytest.raises(Rejected, match="not in the campaign"):
+        load_replay(tmp_path, "ep9")
+
+
+def test_replay_and_registry_are_exclusive(monkeypatch):
+    import sys
+
+    import examples.hv1.deploy_server as server_module
+
+    monkeypatch.setattr(sys, "argv", ["deploy_server", "--campaign", "c", "--replay-episode", "e", "--registry", "r"])
+    with pytest.raises(SystemExit):
+        server_module.main()
+    monkeypatch.setattr(sys, "argv", ["deploy_server", "--campaign", "c", "--snapshot", "s"])
+    with pytest.raises(SystemExit):
+        server_module.main()
+
+
+def test_metadata_accepts_a_recorded_episode_source_only_as_such():
+    replay = {**metadata(), "denoise": None, "source": "recorded_episode"}
+    validate_metadata(replay)
+    with pytest.raises(Rejected, match="sampling"):
+        validate_metadata({**metadata(), "denoise": None})

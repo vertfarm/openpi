@@ -275,12 +275,13 @@ class DeployNode(Node):
             "/kh/upper_body/action/left/twist",
             "/kh/upper_body/action/right/twist",
         ):
-            foreign = [publisher_name(info) for info in self.get_publishers_info_by_topic(topic) if publisher_name(info) != own]
+            foreign = [
+                publisher_name(info) for info in self.get_publishers_info_by_topic(topic) if publisher_name(info) != own
+            ]
             if foreign:
                 raise Rejected(f"foreign twist publisher present: {foreign}")
         joint_publishers = [
-            publisher_name(info)
-            for info in self.get_publishers_info_by_topic("/kh/upper_body/action/joint")
+            publisher_name(info) for info in self.get_publishers_info_by_topic("/kh/upper_body/action/joint")
         ]
         if joint_publishers != [own]:
             raise Rejected("joint command publisher conflict")
@@ -402,7 +403,8 @@ class DeployNode(Node):
 
     def submit(self, state, images, anchor, now, ages):
         self.sequence += 1
-        request = make_request(self.sequence, state, images)
+        run = self.run_started if self.state == "RUNNING" else None
+        request = make_request(self.sequence, state, images, anchor, run)
         # Save the exact received compressed images and numerical model inputs.
         np.savez(
             self.output / f"observation_{self.sequence:06d}.npz",
@@ -482,8 +484,7 @@ class DeployNode(Node):
                 self.guard_status,
                 self.guard_received,
                 now,
-                proposal_id=self.chunks.last_meta.get("proposal_ids")
-                or self.chunks.last_meta["proposal_id"],
+                proposal_id=self.chunks.last_meta.get("proposal_ids") or self.chunks.last_meta["proposal_id"],
             )
             self.hand_event(event, now)
             from trajectory_msgs.msg import JointTrajectory

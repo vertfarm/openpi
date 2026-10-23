@@ -51,8 +51,9 @@ class FakeClient:
             adapter_core_sha256=CORE_SOURCE_SHA256,
             hand_state_envelope={
                 "names": list(HAND_STATE),
-                "q01": [-1.0] * 8,
-                "q99": [1.0] * 8,
+                "basis": "training_min_max",
+                "low": [-1.0] * 8,
+                "high": [1.0] * 8,
                 "margin_rad": 0.05,
             },
         )
@@ -223,10 +224,12 @@ def test_ros_boundary(tmp_path, monkeypatch, mode):
             assert not rig.grasps and not rig.opens
         else:
             wait_until(
-                lambda: node.guard_received > 0
-                and node.close_client.server_is_ready()
-                and node.open_client.service_is_ready()
-                and node.stop_client.service_is_ready()
+                lambda: (
+                    node.guard_received > 0
+                    and node.close_client.server_is_ready()
+                    and node.open_client.service_is_ready()
+                    and node.stop_client.service_is_ready()
+                )
             )
             # An actual local operator command; no DDS ARM service.
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
