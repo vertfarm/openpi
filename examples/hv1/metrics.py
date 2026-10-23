@@ -192,6 +192,9 @@ def close_anticipation(chunks, close_frame, *, window=15, tolerance=3, channel=7
     }
 
 
+KNN_BLOCK_FLOATS = 1 << 26
+
+
 def knn_chunk_baseline(train_states, train_chunks, query_states, *, k=1):
     """Answer each query with the chunk recorded at the nearest training state.
 
@@ -215,12 +218,20 @@ def knn_chunk_baseline(train_states, train_chunks, query_states, *, k=1):
     center = train_states.mean(axis=0)
     train = (train_states - center) / scale
     query = (query_states - center) / scale
-    distances = np.linalg.norm(query[:, None, :] - train[None, :, :], axis=2)
-    neighbours = np.argsort(distances, axis=1, kind="stable")[:, :k]
+    # All queries at once would hold queries x samples x dims floats - several GB for
+    # one ALL59 split - so take as many queries as keep that near KNN_BLOCK_FLOATS.
+    block = max(1, KNN_BLOCK_FLOATS // max(1, train.size))
+    neighbours, nearest = [], []
+    for start in range(0, len(query), block):
+        distances = np.linalg.norm(query[start : start + block, None, :] - train[None, :, :], axis=2)
+        order = np.argsort(distances, axis=1, kind="stable")[:, :k]
+        neighbours.append(order)
+        nearest.append(np.take_along_axis(distances, order, axis=1))
+    neighbours = np.concatenate(neighbours)
     return {
         "chunks": train_chunks[neighbours].mean(axis=1),
         "neighbours": neighbours.tolist(),
-        "distance_median": float(np.median(np.take_along_axis(distances, neighbours, axis=1))),
+        "distance_median": float(np.median(np.concatenate(nearest))),
     }
 
 

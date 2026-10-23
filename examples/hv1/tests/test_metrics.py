@@ -243,3 +243,20 @@ def test_knn_refuses_mismatched_inputs():
         knn_chunk_baseline(np.zeros((3, 2)), np.zeros((3, HORIZON, 8)), np.zeros((1, 3)))
     with pytest.raises(ContractError):
         knn_chunk_baseline(np.zeros((3, 2)), np.zeros((3, HORIZON, 8)), np.zeros((1, 2)), k=4)
+
+
+def test_knn_gives_the_same_answer_when_it_has_to_split_the_queries(monkeypatch):
+    """A real split is tens of thousands of frames, so the lookup works through
+    the queries in blocks. The blocks must not change the answer."""
+    from examples.hv1 import metrics
+
+    rng = np.random.default_rng(0)
+    states = rng.normal(size=(300, 15))
+    chunks = rng.normal(size=(300, HORIZON, 8))
+    queries = rng.normal(size=(50, 15))
+    whole = knn_chunk_baseline(states, chunks, queries, k=3)
+    monkeypatch.setattr(metrics, "KNN_BLOCK_FLOATS", 7 * states.size)  # 7 queries per block
+    split = knn_chunk_baseline(states, chunks, queries, k=3)
+    assert split["neighbours"] == whole["neighbours"]
+    np.testing.assert_allclose(split["chunks"], whole["chunks"])
+    assert split["distance_median"] == whole["distance_median"]
