@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 from datetime import datetime
 import functools
@@ -116,6 +117,22 @@ def make_loader(config, schedule, sharding, consumed=0):
     return data_loader.DataLoaderImpl(data, loader)
 
 
+def data_layout(batch_size, batch_axis, fsdp_axis):
+    """How one batch lies on a `batch_axis` x `fsdp_axis` device mesh: (axes, constrain).
+
+    openpi splits the batch over every device and pins activations to that split.
+    The recipe keeps batch 2, and a 40 GB card needs the model over 4+ cards, so
+    there the batch is split over the batch axis only and replicated along FSDP,
+    with the activation pins off (they assume the full split). Where the full
+    split works - the 2-card A6000 run - nothing changes.
+    """
+    if batch_size % (batch_axis * fsdp_axis) == 0:
+        return "data", True
+    if batch_size % batch_axis == 0:
+        return "batch", False
+    raise ContractError("batch size does not divide the batch axis of the device mesh")
+
+
 def train(campaign, name, deadline, *, resume=False):
     campaign = Path(campaign).resolve()
     manifest = pipeline.verify_campaign(campaign, raw=True)
@@ -190,7 +207,11 @@ def train(campaign, name, deadline, *, resume=False):
     jax.config.update("jax_compilation_cache_dir", str(campaign.parent / "cache/jax"))
     with FileLock(str(campaign.parent / "hv1-ml-gpu.lock"), timeout=0):
         mesh = sharding.make_mesh(config.fsdp_devices)
-        batch_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
+        axes, constrain = data_layout(
+            config.batch_size, mesh.shape[sharding.BATCH_AXIS], mesh.shape[sharding.FSDP_AXIS]
+        )
+        batch_axes = sharding.DATA_AXIS if axes == "data" else sharding.BATCH_AXIS
+        batch_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(batch_axes))
         loader = make_loader(config, schedule, batch_sharding)
         manager, resuming = checkpoints.initialize_checkpoint_dir(
             config.checkpoint_dir,
@@ -226,7 +247,7 @@ def train(campaign, name, deadline, *, resume=False):
                 storage_gate(campaign)
                 before = time.monotonic()
                 batch = next(iterator)
-                with sharding.set_mesh(mesh):
+                with sharding.set_mesh(mesh) if constrain else contextlib.nullcontext():
                     state, info = compiled(train_rng, state, batch)
                 info = jax.device_get(info)
                 if not all(np.isfinite(value).all() for value in jax.tree.leaves(info)):

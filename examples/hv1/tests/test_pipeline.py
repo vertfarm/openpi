@@ -714,3 +714,31 @@ def test_fsdp_devices_refuses_a_count_it_cannot_shard_over(monkeypatch, value):
     monkeypatch.setenv("HV1_FSDP_DEVICES", value)
     with pytest.raises(ContractError, match="HV1_FSDP_DEVICES"):
         fsdp_devices()
+
+
+@pytest.mark.parametrize(
+    ("batch_axis", "fsdp_axis", "expected"),
+    [
+        (1, 1, ("data", True)),
+        (1, 2, ("data", True)),
+        (2, 1, ("data", True)),
+        (1, 4, ("batch", False)),
+        (1, 8, ("batch", False)),
+        (2, 4, ("batch", False)),
+    ],
+)
+def test_data_layout_keeps_batch_two_on_any_card_count(batch_axis, fsdp_axis, expected):
+    """Batch 2 is part of the recipe. A 40 GB card needs the model over 4+ cards, so
+    the batch cannot be split over every device; it is split over the batch axis and
+    replicated along FSDP. Where the full split already works (the 2-card A6000 run),
+    the layout is unchanged."""
+    from examples.hv1.pipeline_train import data_layout
+
+    assert data_layout(2, batch_axis, fsdp_axis) == expected
+
+
+def test_data_layout_refuses_a_batch_the_batch_axis_cannot_split():
+    from examples.hv1.pipeline_train import data_layout
+
+    with pytest.raises(ContractError, match="batch axis"):
+        data_layout(2, 4, 2)
