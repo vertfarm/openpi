@@ -74,6 +74,19 @@ def hand_state_mask(manifest, stats_path):
     return HandStateMask(indices=indices, values=tuple(float(mean[index]) for index in indices))
 
 
+def fsdp_devices():
+    """How many GPUs one model is sharded across, from `HV1_FSDP_DEVICES` (default 1).
+
+    A host setting, not a recipe field: it decides whether the model fits, not what
+    it learns, so it stays out of the comparison. A full pi0.5 fine-tune needs more
+    than one 48 GB card; set it to the number of visible GPUs so the batch axis is 1.
+    """
+    value = os.environ.get("HV1_FSDP_DEVICES", "1")
+    if not value.isdigit() or int(value) < 1:
+        raise ContractError("HV1_FSDP_DEVICES must be a positive integer")
+    return int(value)
+
+
 def local_dataset(data, model, root):
     """Use the explicit local LeRobot export and never fall back to the Hub."""
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -202,6 +215,7 @@ def configure(campaign, recipe):
         weight_loader=weight_loader,
         freeze_filter=config.model.get_freeze_filter(),
         batch_size=recipe["batch_size"],
+        fsdp_devices=fsdp_devices(),
         seed=recipe["seed"],
         num_workers=0,
         ema_decay=recipe["ema_decay"],

@@ -691,3 +691,26 @@ def test_the_hand_mask_reaches_training_and_evaluation_alike():
     assert group.outputs == ("out",)
     source = Path(native.__file__).with_name("pipeline_config.py").read_text(encoding="utf-8")
     assert 'recipe.get("mask_hand_state")' in source
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, 1), ("2", 2), ("4", 4)])
+def test_fsdp_devices_is_a_host_setting_with_a_safe_default(monkeypatch, value, expected):
+    """A 48 GB card cannot hold a full pi0.5 fine-tune; sharding is chosen per host
+    and never enters the recipe, so the same experiment means the same thing anywhere."""
+    from examples.hv1.pipeline_config import fsdp_devices
+
+    if value is None:
+        monkeypatch.delenv("HV1_FSDP_DEVICES", raising=False)
+    else:
+        monkeypatch.setenv("HV1_FSDP_DEVICES", value)
+    assert fsdp_devices() == expected
+    assert "fsdp_devices" not in pipeline.recipe("ALL59_HO_30K", manifest()["sha256"])
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "two", ""])
+def test_fsdp_devices_refuses_a_count_it_cannot_shard_over(monkeypatch, value):
+    from examples.hv1.pipeline_config import fsdp_devices
+
+    monkeypatch.setenv("HV1_FSDP_DEVICES", value)
+    with pytest.raises(ContractError, match="HV1_FSDP_DEVICES"):
+        fsdp_devices()
