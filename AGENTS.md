@@ -5,11 +5,12 @@
 
 ## 저장소와 작업트리
 
-- canonical 브랜치: `codex/hv1-vla-workflow-20260909` (remote `origin`)
+- canonical 브랜치: `hv1/vla-v2-20261023` (remote `origin`, 2026-10-23부터). 이전 기준 `codex/hv1-vla-workflow-20260909`는
+  `399af31`에서 멈춘 기록이고, 배포 중인 TODAY30-1000은 그 브랜치 코드로 학습·검증됐다. 새 작업은 새 브랜치에만 올린다.
 - 작업트리는 현장 운영 PC(RTX 5090) `~/workspace/openpi-hv1` 하나가 기준이다(2026-09-30).
   현장 PC에는 GitHub 인증이 없으므로, 인증된 PC가 `git bundle`로 커밋을 받아 푸시한다.
   **git이 머신 간 코드를 공유하는 유일한 채널이다.**
-- RTX PRO 6000은 보관·대형 학습 후보다. 그쪽 체크아웃(`1fdd5a7` + stash)은 기준이 아니다.
+- RTX PRO 6000은 학습 호스트다(97 GB). 그쪽 체크아웃은 기준이 아니고 학습할 때 canonical 브랜치를 fast-forward해 쓴다. 6000에만 있는 `stash@{0}`은 지우지 않는다.
 - OneDrive/Obsidian wiki는 사람의 기록이다. 현장 머신에서 읽을 수 없으므로
   에이전트 간 조율 채널로 쓰지 않는다.
 - 트리가 갈라져 보이면 먼저 `git fetch` 후 실제 차이를 확인한다.

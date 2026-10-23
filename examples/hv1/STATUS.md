@@ -1,6 +1,6 @@
 # HV1 현재 상태
 
-최종 갱신 2026-09-30 · 규약은 [AGENTS.md](../../AGENTS.md)
+최종 갱신 2026-10-23 · 규약은 [AGENTS.md](../../AGENTS.md)
 
 이 파일은 **지금 사실인 것**만 담는다. 매 세션 끝에 덮어쓴다.
 
@@ -33,6 +33,18 @@
   코드 레버 V1(손실 가중)·V2(state 노이즈)·V3(결합)는 **이 학습량에서만** 시험했고 셋 다
   노이즈 바닥 안이었다(V2는 정책만 25배 불안정해졌다).
 
+## 2026-10-23 현장 기준 — 상체 업데이트와 다음 실험
+
+| 항목 | 지금 |
+|---|---|
+| 팔꿈치 기구 | 교체 완료(10-20). 팔꿈치 축이 30 mm 앞으로 나간 URDF **261020**이 나왔다(팔꿈치 pitch 관절 origin x +0.03, 손목 roll 관절 origin x −0.03, 좌우 대칭) |
+| 현장 제어 URDF | 5090의 `keti_humanoid_ros2`(`29c85f0`)에서 `kh_upper_body.urdf`가 **커밋되지 않은 상태로** 261020 오프셋에 맞게 수정돼 있다. 팔꿈치·어깨 yaw 메시 4개도 바뀌었다. 원본 백업이 같은 폴더에 있다. 파일 해시는 261020 원본과 다르므로, 관절 외 차이는 아직 대조하지 않았다 |
+| 관절 한계 | 여전히 전 관절 ±1.5708(CAD 값). 새 팔꿈치 가동각은 반영되지 않았다. `kh_kinematics.yaml` `limits_verified: true` 불일치도 그대로다 |
+| 데이터 | 기존 59 ep는 **이전 임바디먼트**다. 새 URDF로 모으는 양팔 데이터(데이터 v2)와 섞지 않는다 |
+| 학습 호스트 | 6000(RTX PRO 6000 97 GB). 공용이라 SteamVR 텔레옵과 겹치면 GPU 점유를 조율한다. A100 클러스터 접근을 준비 중이다 |
+| 다음 실험 | E5: `ALL59_HO_30K`(30k step, 2k/10k/30k 스냅샷, 진단 12 ep held-out)와 `ALL59_HO_30K_NOHAND`(손 state 고정). 학습량과 손 state copycat을 가른다. [TRAINING.md](TRAINING.md) 「E5」 |
+| 평가 지표 | `metrics.close_anticipation`(닫기를 미리 내다보는가), `metrics.knn_chunk_baseline`(state만으로 답하는 기준선) 추가. 아직 CLI에 연결하지 않았다 |
+
 ## 2026-09-30 현장 기준 — 09-14 이후 바뀐 것
 
 | 항목 | 지금 |
@@ -51,7 +63,7 @@
 
 | 항목 | 값 |
 |---|---|
-| canonical 브랜치 | `codex/hv1-vla-workflow-20260909` (remote `origin`). 현장 5090 = GitHub |
+| canonical 브랜치 | `hv1/vla-v2-20261023` (remote `origin`, 2026-10-23부터). 현장 5090·6000 체크아웃은 아직 이전 브랜치(`399af31`·`1fdd5a7`)이고, 쓸 때 이 브랜치로 옮긴다 |
 | 회귀 테스트 | 249개 통과(2026-09-30, 공개 저장소 위생 검사 `test_public_hygiene.py` 포함, `.venv/bin/python -B -m pytest examples/hv1/tests -q`, 약 17초) |
 | lint | `ruff check --select F,E4,E7,E9,I` + `ruff format --check` 통과 (`ros/**` 제외) |
 | 진입점 | 10모듈 / 29명령 (캠페인 5 + 운영 4 + 합성 1). `test_artifacts.py`가 고정 |
