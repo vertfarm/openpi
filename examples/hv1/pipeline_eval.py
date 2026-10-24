@@ -433,7 +433,8 @@ def register(campaign, snapshot, reviewer):
     if (
         not reviewer.strip()
         or not snapshot.is_relative_to(campaign / "snapshots")
-        or record["recipe"]["name"] not in pipeline.TRACKS
+        # The E5 ablations (ALL59_HO_30K, ...) are the 2026-10-24 deployment candidates.
+        or record["recipe"]["name"] not in {*pipeline.TRACKS, *pipeline.ABLATIONS}
         or record.get("manifest_sha256") != manifest["sha256"]
     ):
         raise ContractError("reviewer and matching two-track snapshot required")

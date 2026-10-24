@@ -751,3 +751,37 @@ def test_evaluation_reports_overlap_against_the_episodes_actually_trained_on():
     source = Path(native.__file__).with_name("pipeline_eval.py").read_text(encoding="utf-8")
     assert "selected = pipeline.training_ids(manifest, recipe)" in source
     assert 'selected = set(manifest["tracks"][recipe["track"]]["episode_ids"])' not in source
+
+
+@pytest.mark.parametrize(("name", "allowed"), [("ALL59_HO_30K", True), ("ALL59", True), ("SMOKE", False)])
+def test_register_admits_held_out_ablation_snapshots_for_shadow(tmp_path, monkeypatch, name, allowed):
+    """The E5 snapshots (ALL59_HO_30K) are the deployment candidates; the
+    registry must take them, with the same evaluation evidence as a track, and
+    still refuse a SMOKE snapshot."""
+    from examples.hv1 import pipeline_eval
+    from examples.hv1.artifacts import file_hash
+    from examples.hv1.artifacts import write_new_json
+
+    campaign = tmp_path / "campaign"
+    snapshot = campaign / "snapshots" / name / "step_030000"
+    snapshot.mkdir(parents=True)
+    write_new_json(snapshot / "snapshot.json", {"step": 30000})
+    record = dict(step=30000, manifest_sha256="m", recipe={"name": name, "track": "ALL59"}, norm_stats_sha256="n")
+    groups = {g: [{"episode": i} for i in range(6)] for g in ("old_fixed6", "today_fixed6")}
+    write_new_json(
+        campaign / "evaluations" / f"{name}_030000.json",
+        dict(
+            snapshot_sha256=file_hash(snapshot / "snapshot.json"),
+            manifest_sha256="m",
+            gpu_reload_pass=True,
+            groups=groups,
+        ),
+    )
+    monkeypatch.setattr(pipeline_eval.pipeline, "verify_campaign", lambda campaign: {"sha256": "m"})
+    monkeypatch.setattr(pipeline_eval, "snapshot_identity", lambda snapshot: record)
+    if allowed:
+        entry = pipeline_eval.register(campaign, snapshot, "reviewer")
+        assert entry["status"] == "SHADOW_ONLY" and entry["robot_motion_authorized"] is False
+    else:
+        with pytest.raises(ContractError, match="reviewer and matching"):
+            pipeline_eval.register(campaign, snapshot, "reviewer")
