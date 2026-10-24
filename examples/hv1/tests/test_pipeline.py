@@ -743,3 +743,11 @@ def test_data_layout_refuses_a_batch_the_batch_axis_cannot_split():
 
     with pytest.raises(ContractError, match="batch axis"):
         data_layout(2, 4, 2)
+
+
+def test_evaluation_reports_overlap_against_the_episodes_actually_trained_on():
+    """A held-out recipe trains on its track minus the diagnostics, so the
+    evaluation must not report the held-out diagnostics as training overlap."""
+    source = Path(native.__file__).with_name("pipeline_eval.py").read_text(encoding="utf-8")
+    assert "selected = pipeline.training_ids(manifest, recipe)" in source
+    assert 'selected = set(manifest["tracks"][recipe["track"]]["episode_ids"])' not in source

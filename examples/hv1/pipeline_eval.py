@@ -63,7 +63,7 @@ def evaluate(campaign, snapshot, *, reference=None, smoke=False, intent_sidecar=
     diagnostics = [episode for episode in manifest["episodes"] if episode["diagnostic_group"]]
     if smoke:
         diagnostics = diagnostics[:1]
-    selected = set(manifest["tracks"][recipe["track"]]["episode_ids"])
+    selected = pipeline.training_ids(manifest, recipe)
     result = dict(
         schema=pipeline.SCHEMA,
         manifest_sha256=manifest["sha256"],
