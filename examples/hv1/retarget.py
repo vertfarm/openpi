@@ -82,11 +82,14 @@ def _retarget_file(path, remap):
     return worst
 
 
-def retarget_session(source, output, from_urdf, to_urdf, limits):
+def retarget_session(source, output, from_urdf, to_urdf, limits, *, episodes=None):
     """Write `output` as `source` re-solved from the `from_urdf` arm to the `to_urdf` arm.
 
     `limits` is `(joint_min, joint_max)` or `(joint_min, joint_max, profile_sha256)`
-    for the right arm, from the approved field profile.
+    for the right arm, from the approved field profile. With `episodes`, only
+    those episode ids are re-solved and the session's other episodes are left
+    out of the output, never copied through with old-arm rows; metadata.json
+    stays whole because `prepare` checks the session inventory.
     """
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists():
@@ -98,14 +101,22 @@ def retarget_session(source, output, from_urdf, to_urdf, limits):
         raise ContractError("both URDFs must carry the contract's right-arm joints in order")
     remap = Remap(old, new.with_limits(limits[0], limits[1]))
     metadata = read_json(source / "metadata.json")
+    listed = [episode["id"] for episode in metadata["episodes"]]
+    keep = set(listed) if episodes is None else set(episodes)
+    if not keep or keep - set(listed):
+        raise ContractError(f"episodes not in the session: {sorted(keep - set(listed))}")
     partial = output.with_name(f".{output.name}.partial")
     if partial.exists():
         raise ContractError(f"a previous partial output is in the way: {partial}")
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, partial)
-        episodes = {}
-        for episode in metadata["episodes"]:
+        omitted = sorted(set(listed) - keep)
+        for episode_id in omitted:
+            # Inside the copy this call just made; the source keeps every episode.
+            shutil.rmtree(partial / "episodes" / episode_id)
+        solved = {}
+        for episode in (e for e in metadata["episodes"] if e["id"] in keep):
             path = partial / "episodes" / episode["id"] / "data.hdf5"
             try:
                 worst = _retarget_file(path, remap)
@@ -113,7 +124,7 @@ def retarget_session(source, output, from_urdf, to_urdf, limits):
                 raise ContractError(f"{episode['id']}: {error}") from error
             if file_hash(path) == file_hash(source / "episodes" / episode["id"] / "data.hdf5"):
                 raise ContractError(f"{episode['id']}: nothing changed")
-            episodes[episode["id"]] = dict(
+            solved[episode["id"]] = dict(
                 source_sha256=file_hash(source / "episodes" / episode["id"] / "data.hdf5"),
                 output_sha256=file_hash(path),
                 max_tool_residual_mm=1000 * worst,
@@ -124,7 +135,8 @@ def retarget_session(source, output, from_urdf, to_urdf, limits):
             to_urdf_sha256=file_hash(to_urdf),
             limits_right=[list(map(float, limits[0])), list(map(float, limits[1]))],
             limits_profile_sha256=limits[2] if len(limits) > 2 else None,
-            episodes=episodes,
+            episodes=solved,
+            omitted=omitted,
         )
         (partial / "retarget.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         partial.rename(output)
@@ -136,6 +148,14 @@ def retarget_session(source, output, from_urdf, to_urdf, limits):
     return report
 
 
+def campaign_episodes(manifest_path, session):
+    """The episode ids a campaign manifest uses from one session."""
+    ids = {e["episode_id"] for e in read_json(manifest_path)["episodes"] if e.get("session_id") == session}
+    if not ids:
+        raise ContractError(f"the campaign uses no episodes of {session}")
+    return ids
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="recorded session root (metadata.json, episodes/)")
@@ -143,10 +163,18 @@ def main():
     parser.add_argument("--from-urdf", required=True, help="the arm the session was recorded on")
     parser.add_argument("--to-urdf", required=True, help="the arm to re-solve for")
     parser.add_argument("--limits", required=True, help="approved field profile with the right-arm joint_min/max")
+    parser.add_argument("--campaign-manifest", help="re-solve only the episodes this campaign uses; drop the rest")
     args = parser.parse_args()
-    report = retarget_session(args.source, args.output, args.from_urdf, args.to_urdf, field_limits(args.limits))
+    episodes = None
+    if args.campaign_manifest:
+        episodes = campaign_episodes(
+            args.campaign_manifest, read_json(Path(args.source) / "metadata.json")["dataset_name"]
+        )
+    report = retarget_session(
+        args.source, args.output, args.from_urdf, args.to_urdf, field_limits(args.limits), episodes=episodes
+    )
     worst = max(e["max_tool_residual_mm"] for e in report["episodes"].values())
-    print(json.dumps(dict(episodes=len(report["episodes"]), max_tool_residual_mm=worst)))
+    print(json.dumps(dict(episodes=len(report["episodes"]), omitted=report["omitted"], max_tool_residual_mm=worst)))
 
 
 if __name__ == "__main__":
