@@ -14,6 +14,7 @@ import time
 
 import numpy as np
 
+from .ros.keti_humanoid_inference.keti_humanoid_inference.core import ARM_STATE
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import CAMERAS
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import CONTRACT
 from .ros.keti_humanoid_inference.keti_humanoid_inference.core import CONTRACT_SHA
@@ -122,6 +123,68 @@ class RecordedEpisode:
         when = anchor - self.first + np.arange(CONTRACT["horizon"]) / CONTRACT["hz"]
         rows = np.clip(np.searchsorted(self.times, when + 1e-9, side="right") - 1, 0, len(self.actions) - 1)
         return {"actions": self.actions[rows]}
+
+
+class ArmRemap:
+    """Serve a policy trained on one arm to another arm by keeping the tool pose.
+
+    The 2026-09 recordings, and every snapshot trained on them, use the arm
+    before the 2026-10-20 upper body. The same angles put the new arm's tool a
+    median 28 mm forward and down at a grasp. The policy is shown the
+    trained-arm angles that put its tool where the robot's tool is - inside the
+    trained arm's own limits, so it is never shown a pose that arm could not
+    take - and its targets go out as robot angles for the same tool pose,
+    solved inside the field-measured limits (required: the URDF's are CAD
+    placeholders). A target that is unreachable, or whose remapped step jumps
+    beyond its source step, refuses the chunk rather than being clipped.
+    """
+
+    def __init__(self, trained_urdf, robot_urdf, limits):
+        from .artifacts import file_hash
+        from .kinematics import Chain
+        from .kinematics import Remap
+
+        trained, robot = Chain.from_urdf(trained_urdf, "Right_tool0"), Chain.from_urdf(robot_urdf, "Right_tool0")
+        if trained.names != tuple(ARM_STATE) or robot.names != tuple(ARM_STATE):
+            raise Rejected("remap URDFs must carry the contract's right-arm joints in order")
+        low, high, profile_sha = limits
+        self.to_policy = Remap(robot, trained)
+        self.to_robot = Remap(trained, robot.with_limits(low, high))
+        self.identity = {
+            "trained_urdf_sha256": file_hash(trained_urdf),
+            "robot_urdf_sha256": file_hash(robot_urdf),
+            "robot_limits": [list(map(float, low)), list(map(float, high))],
+            "robot_limits_profile_sha256": profile_sha,
+            "tool_link": "Right_tool0",
+        }
+
+    def state(self, q_robot):
+        try:
+            return self.to_policy.convert(q_robot, seed=q_robot)
+        except ValueError as error:
+            raise Rejected(f"remap of robot state: {error}") from error
+
+    def actions(self, chunk, q_robot, q_policy):
+        chunk = np.asarray(chunk, dtype=np.float64)
+        try:
+            arm = self.to_robot.trajectory(chunk[:, :7], seed=q_robot, source_seed=q_policy)
+        except ValueError as error:
+            raise Rejected(f"remap of policy targets: {error}") from error
+        return np.c_[arm, chunk[:, 7:]]
+
+
+def policy_step(policy, metadata, payload, state, images, remap=None):
+    """One inference: remap the arm state in, call the policy, remap the targets out."""
+    q_robot = np.asarray(state[:7], dtype=np.float64)
+    q_policy = None if remap is None else remap.state(q_robot)
+    seen = state if remap is None else np.r_[q_policy, state[7:]].astype(np.float32)
+    obs = {"state": seen, "images": images, "prompt": PROMPT}
+    if metadata.get("source") == "recorded_episode":
+        obs.update(anchor=payload.get("anchor"), run=payload.get("run"))
+    actions = np.asarray(policy.infer(obs)["actions"])
+    if actions.shape != (15, 8) or not np.isfinite(actions).all():
+        raise Rejected("invalid model output")
+    return actions if remap is None else remap.actions(actions, q_robot, q_policy)
 
 
 def prepare_images(payload):
@@ -258,7 +321,7 @@ def load_replay(campaign, episode_id):
     return RecordedEpisode(actions, info["row_timestamp_seconds"]), meta
 
 
-def make_handler(policy, metadata):
+def make_handler(policy, metadata, remap=None):
     inference_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -306,12 +369,7 @@ def make_handler(policy, metadata):
                 validate_hand_envelope(state[7:], metadata)
                 images = prepare_images(payload)
                 prepared = time.perf_counter()
-                obs = {"state": state, "images": images, "prompt": PROMPT}
-                if metadata.get("source") == "recorded_episode":
-                    obs.update(anchor=payload.get("anchor"), run=payload.get("run"))
-                actions = np.asarray(policy.infer(obs)["actions"])
-                if actions.shape != (15, 8) or not np.isfinite(actions).all():
-                    raise Rejected("invalid model output")
+                actions = policy_step(policy, metadata, payload, state, images, remap)
                 self.reply(
                     200,
                     {
@@ -346,20 +404,32 @@ def main():
     source.add_argument("--replay-episode", help="serve this campaign episode's recorded actions, open-loop")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--registry", help="Hash-bound SHADOW_ONLY registry; never auto-arms ROS")
+    parser.add_argument("--remap-trained-urdf", help="the arm the policy or recording was trained on")
+    parser.add_argument("--remap-robot-urdf", help="the arm it now runs on")
+    parser.add_argument("--remap-limits", help="field profile whose joint_min/joint_max bound the robot side")
     args = parser.parse_args()
+    remap_args = (args.remap_trained_urdf, args.remap_robot_urdf, args.remap_limits)
+    if any(remap_args) and not all(remap_args):
+        parser.error("--remap-trained-urdf, --remap-robot-urdf and --remap-limits go together")
     if not 1024 <= args.port <= 65535:
         parser.error("port must be 1024..65535")
     if args.snapshot and not args.registry:
         parser.error("--snapshot requires --registry")
     if args.replay_episode and args.registry:
         parser.error("--replay-episode does not use a registry; the field profile names the recording")
+    remap = None
+    if args.remap_robot_urdf:
+        from .kinematics import field_limits
+
+        remap = ArmRemap(args.remap_trained_urdf, args.remap_robot_urdf, field_limits(args.remap_limits))
     if args.replay_episode:
         policy, meta = load_replay(args.campaign, args.replay_episode)
         lock = None
     else:
         os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
         policy, meta, lock = load_snapshot(args.campaign, args.snapshot, registry=args.registry)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(policy, meta))
+    meta["kinematic_remap"] = None if remap is None else remap.identity
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(policy, meta, remap))
     print(json.dumps(meta), flush=True)
     try:
         server.serve_forever()

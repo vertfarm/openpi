@@ -170,9 +170,19 @@ def test_shared_snapshot_requires_complete_evidence(tmp_path, field):
 # that two retired generations kept their entry points after their callers were
 # gone. `native` and `openpi_run` became libraries when theirs were removed.
 CAMPAIGN_CLIS = ("pipeline", "pipeline_run", "pipeline_train", "pipeline_eval", "deploy_server")
-OPERATOR_CLIS = ("deploy_smoke", "shadow_eval", "source_contract", "verify_export")
+# `retarget` (2026-10-24) re-solves recorded arm joints for the 2026-10-20 upper body.
+OPERATOR_CLIS = ("deploy_smoke", "retarget", "shadow_eval", "source_contract", "verify_export")
 SYNTHETIC_CLIS = ("cli",)
-LIBRARIES_ONLY = ("artifacts", "checkpoints", "metrics", "native", "openpi_run", "pipeline_config", "transforms")
+LIBRARIES_ONLY = (
+    "artifacts",
+    "checkpoints",
+    "kinematics",
+    "metrics",
+    "native",
+    "openpi_run",
+    "pipeline_config",
+    "transforms",
+)
 
 
 def test_the_entry_point_surface_is_the_declared_one():

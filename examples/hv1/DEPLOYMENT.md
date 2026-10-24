@@ -78,6 +78,21 @@ CAMPAIGN=~/workspace/hv1-vla-runtime/two-track-20260910-r3
 
 `--registry`는 필수다(2026-09-11). C/F-5000만 허용했던 legacy 분기는 삭제했다.
 
+**새 팔 재매핑(2026-10-24).** 2026-10-20 상체는 팔꿈치 pitch origin이 30 mm 앞으로, 손목 roll origin이 30 mm 뒤로 옮겨졌다. 팔꿈치가 펴져 있으면 둘이 상쇄되지만 굽히면 상쇄되지 않는다. 그래서 같은 관절각이라도 녹화 파지 시점의 tool(`Right_tool0`)이 중앙값 28 mm 앞·아래로 간다. 2026-09 녹화로 학습한 snapshot과 녹화 재생은 옛 팔 관절각을 쓴다.
+
+```bash
+.venv/bin/python -B -m examples.hv1.deploy_server --campaign "$CAMPAIGN" --snapshot ... --registry ... \
+  --remap-trained-urdf <옛 팔 URDF> --remap-robot-urdf <현장 URDF> --remap-limits <field profile>
+```
+
+- 정책 입력: 로봇 관절각을, 같은 tool pose를 만드는 옛 팔 관절각으로 바꿔 보여 준다. 이 관절각은 옛 팔 URDF 한계 안에서 푼다. 옛 팔이 가질 수 없던 자세는 정책에 보여 주지 않고 거부한다.
+- 정책 출력: 옛 팔 목표를, 같은 tool pose를 만드는 로봇 관절각으로 바꿔 보낸다. IK는 감쇠 최소제곱이고, 한계에 걸린 관절은 그 step에서 뺀다. step 크기에는 상한이 있고, 진전이 멈추면 일찍 거부한다. 각 행은 이전 행을 seed로 푼다. 행 사이 로봇 쪽 step이 원래 step의 2배 + 0.01 rad를 넘으면 불연속으로 보고 chunk를 거부한다. 손 채널과 intent는 그대로 둔다.
+- `--remap-limits`(승인된 field profile의 `joint_min`/`joint_max`)는 필수다. URDF 한계(±90°)는 CAD 자리값이다. 한계 밖 목표는 clipping하지 않고 chunk 전체를 거부한다(422).
+- 녹화 시작 자세를 새 팔에서 재현하려면 오른 팔꿈치가 약 1.62 rad 필요하다. 2026-10-24 기준 현장 컨트롤러는 URDF 미커밋 수정으로 2.0594까지 허용한다. 09-11 승인 field profile은 1.5708이다.
+- `/health`의 `kinematic_remap`에는 두 URDF 해시, 한계 값, 한계를 준 profile 해시가 남는다. URDF 파일은 이 저장소에 두지 않는다.
+- 측정값(2026-10-24, 실제 URDF, 녹화 키프레임 177개): 한계 1.65에서 모두 풀린다. 잔차는 0.4 µm, 자세당 약 0.85 ms, 15행 chunk는 약 7 ms다.
+- 재학습용으로 녹화를 새 팔 관절로 다시 풀려면 `python -m examples.hv1.retarget --source <session> --output <새 상위>/<같은 session 이름> --from-urdf ... --to-urdf ... --limits <승인 field profile>`을 쓴다. 오른팔만 다시 푼다. 원본은 읽기만 한다. 모든 에피소드에서 오른팔 관측·명령 표를 둘 다 찾고, 모든 행이 한계 안에서 끊김 없이 풀릴 때만 새 session을 쓴다.
+
 **녹화 open-loop 재생(2026-10-24).** 모델 대신 캠페인 에피소드의 녹화 action을 같은 서버
 계약으로 내보낸다. node·queue·gate는 정책과 같은 경로를 지난다. 그래서 배포 경로와
 "데이터가 가르칠 수 있는가"(그리퍼가 제때 닫히는가)를 정책보다 먼저 확인할 수 있다.

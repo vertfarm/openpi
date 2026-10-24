@@ -164,3 +164,54 @@ def source_session(source_episode):
         return root
 
     return build
+
+
+ARM_JOINTS = tuple(
+    f"Right_{j}_Joint"
+    for j in (
+        "Shoulder_Pitch",
+        "Shoulder_Roll",
+        "Shoulder_Yaw",
+        "Elbow_Pitch",
+        "Wrist_Roll",
+        "Wrist_Yaw",
+        "Wrist_Pitch",
+    )
+)
+_AXES = ("0 -1 0", "-1 0 0", "0 0 1", "0 -1 0", "0 0 -1", "1 0 0", "0 1 0")
+# Made-up round lengths: the joint names and axis pattern follow HV1, the
+# geometry does not. No robot geometry is kept in this public repository.
+_ORIGINS = ("0 -0.2 0.3", "0 -0.05 0", "0 0 -0.1", "{elbow} 0 -0.25", "{wrist} 0 -0.2", "0 0 -0.1", "0 0 -0.05")
+TOOL_OFFSET = "0 0 -0.1"
+
+
+@pytest.fixture
+def arm_urdf(tmp_path):
+    """A synthetic seven-joint right arm.
+
+    `elbow_x`/`wrist_x` move the elbow and wrist-roll origins in opposite
+    directions, the kind of change the 2026-10-20 upper body made, so two calls
+    make an "old" and a "new" arm. `tilt` gives the shoulder-roll joint a
+    non-zero rpy so the URDF frame convention is exercised.
+    """
+
+    def make(name, elbow_x=0.0, wrist_x=0.0, limit=1.5708, tilt="0 0 0"):
+        links = ["Base_UpperBody", *(n.removesuffix("_Joint") for n in ARM_JOINTS), "Right_tool0"]
+        body = [f'<link name="{link}"/>' for link in links]
+        for index, (joint, axis, origin) in enumerate(zip(ARM_JOINTS, _AXES, _ORIGINS)):
+            rpy = tilt if index == 1 else "0 0 0"
+            body.append(
+                f'<joint name="{joint}" type="revolute"><parent link="{links[index]}"/>'
+                f'<child link="{links[index + 1]}"/><origin xyz="{origin.format(elbow=elbow_x, wrist=wrist_x)}"'
+                f' rpy="{rpy}"/><axis xyz="{axis}"/>'
+                f'<limit lower="{-limit}" upper="{limit}" effort="1" velocity="1"/></joint>'
+            )
+        body.append(
+            '<joint name="Right_tool0_Joint" type="fixed"><parent link="Right_Wrist_Pitch"/>'
+            f'<child link="Right_tool0"/><origin xyz="{TOOL_OFFSET}" rpy="0 0 0"/></joint>'
+        )
+        path = tmp_path / f"{name}.urdf"
+        path.write_text(f'<robot name="{name}">{"".join(body)}</robot>', encoding="utf-8")
+        return path
+
+    return make

@@ -553,3 +553,80 @@ def test_metadata_accepts_a_recorded_episode_source_only_as_such():
     validate_metadata(replay)
     with pytest.raises(Rejected, match="sampling"):
         validate_metadata({**metadata(), "denoise": None})
+
+
+GRASP_Q = np.array([0.4, -0.1, 0.2, 0.9, 0.05, 0.3, 0.2])
+WIDE = ([-1.5] * 7, [1.5] * 7, "profile-sha")
+
+
+def test_arm_remap_serves_an_old_arm_policy_on_the_new_arm(arm_urdf):
+    """The policy sees the old-arm angles for the robot's tool pose, and its
+    old-arm targets go out as new-arm angles for the same tool pose."""
+    from examples.hv1.deploy_server import ArmRemap
+    from examples.hv1.kinematics import Chain
+
+    old, new = arm_urdf("old"), arm_urdf("new", elbow_x=0.03, wrist_x=-0.03)
+    remap = ArmRemap(old, new, WIDE)
+    old_chain, new_chain = Chain.from_urdf(old, "Right_tool0"), Chain.from_urdf(new, "Right_tool0")
+    q_policy = remap.state(GRASP_Q)
+    np.testing.assert_allclose(old_chain.fk(q_policy)[1], new_chain.fk(GRASP_Q)[1], atol=1e-5)
+    chunk = np.c_[q_policy + np.linspace(0, 0.05, 15)[:, None], np.r_[np.zeros(7), np.ones(8)]]
+    sent = remap.actions(chunk, GRASP_Q, q_policy)
+    for target, commanded in zip(chunk, sent):
+        np.testing.assert_allclose(new_chain.fk(commanded[:7])[1], old_chain.fk(target[:7])[1], atol=1e-5)
+    np.testing.assert_array_equal(sent[:, 7], chunk[:, 7])
+    assert remap.identity["robot_limits_profile_sha256"] == "profile-sha"
+    assert remap.identity["trained_urdf_sha256"] != remap.identity["robot_urdf_sha256"]
+
+
+def test_arm_remap_refuses_targets_the_robot_cannot_reach(arm_urdf):
+    from examples.hv1.deploy_server import ArmRemap
+
+    remap = ArmRemap(
+        arm_urdf("old", limit=3.0), arm_urdf("new", elbow_x=0.03, wrist_x=-0.03), ([-1.0] * 7, [1.0] * 7, "p")
+    )
+    chunk = np.c_[np.tile([0, 0, 0, 2.5, 0, 0, 0], (15, 1)), np.zeros(15)]
+    with pytest.raises(Rejected, match="remap of policy targets: IK"):
+        remap.actions(chunk, np.zeros(7), np.zeros(7))
+
+
+def test_arm_remap_refuses_to_show_the_policy_a_pose_its_arm_never_had(arm_urdf):
+    """The policy state is solved inside the trained arm's limits: a robot pose
+    that arm could not take is refused, not shown out of distribution."""
+    from examples.hv1.deploy_server import ArmRemap
+
+    remap = ArmRemap(arm_urdf("old", limit=1.0), arm_urdf("new", elbow_x=0.03, wrist_x=-0.03, limit=3.0), WIDE)
+    with pytest.raises(Rejected, match="remap of robot state"):
+        remap.state(np.array([0.0, 0.0, 0.0, 2.5, 0.0, 0.0, 0.0]))
+
+
+def test_policy_step_applies_the_remap_around_the_model(arm_urdf):
+    from examples.hv1.deploy_server import ArmRemap
+    from examples.hv1.deploy_server import policy_step
+
+    seen = {}
+
+    class Model:
+        def infer(self, obs):
+            seen["state"] = obs["state"].copy()
+            return {"actions": np.tile(np.r_[obs["state"][:7], 1.0], (15, 1))}
+
+    remap = ArmRemap(arm_urdf("old"), arm_urdf("new", elbow_x=0.03, wrist_x=-0.03), WIDE)
+    state = np.r_[GRASP_Q, np.zeros(8)].astype(np.float32)
+    images = {c: np.zeros((224, 224, 3), np.uint8) for c in CAMERAS}
+    actions = policy_step(Model(), metadata(), {}, state, images, remap)
+    np.testing.assert_allclose(seen["state"][:7], remap.state(GRASP_Q), atol=1e-6)
+    np.testing.assert_allclose(actions[:, :7], np.tile(GRASP_Q, (15, 1)), atol=1e-4)
+    plain = policy_step(Model(), metadata(), {}, state, images, None)
+    np.testing.assert_allclose(plain[:, :7], np.tile(GRASP_Q, (15, 1)), atol=1e-6)
+
+
+def test_remap_needs_both_urdfs_and_the_field_limits(monkeypatch):
+    import sys
+
+    import examples.hv1.deploy_server as server_module
+
+    for remap in (["--remap-robot-urdf", "x"], ["--remap-trained-urdf", "x", "--remap-robot-urdf", "y"]):
+        monkeypatch.setattr(sys, "argv", ["deploy_server", "--campaign", "c", "--replay-episode", "e", *remap])
+        with pytest.raises(SystemExit):
+            server_module.main()
