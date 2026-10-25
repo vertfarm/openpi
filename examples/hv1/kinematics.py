@@ -1,12 +1,14 @@
 """Forward and inverse kinematics of one URDF arm, and moving joint angles between arms.
 
-The 2026-10-20 upper body moved the elbow pitch origin forward and the wrist
-roll origin back by the same amount. The two cancel with the elbow straight and
-not otherwise, so the recorded angles put the new arm's tool a median 28 mm
-away at a grasp. Policies trained on the earlier arm speak its joint angles;
-`Remap` carries them to the new arm by keeping the tool pose, which is what the
-cameras and the object see. Numpy only; the URDFs are read from disk, never kept
-in this repository.
+The arm changed twice after the 2026-09-09/10 recordings. On 2026-09-30 the
+wrist pitch motor was remounted turned about the forearm axis, so the same
+wrist angle now bends the other way about a moved joint. The 2026-10-20 upper
+body then moved the elbow pitch origin forward and the wrist roll origin back
+by the same amount. Policies trained on the recordings speak the recording-time
+arm's joint angles; `Remap` carries them to today's arm by keeping the tool
+pose, which is what the cameras and the object see. `fit_tool` checks which arm
+a recording was made on against the poses the recorder logged. Numpy only; the
+URDFs are read from disk, never kept in this repository.
 """
 
 from __future__ import annotations
@@ -187,6 +189,40 @@ def check_step(source_step, target_step):
     jump = np.max(np.abs(target_step))
     if jump > bound:
         raise ContractError(f"remap is discontinuous: {jump:.3f} rad step for a {bound:.3f} rad bound")
+
+
+def _quaternion_rotation(xyzw):
+    x, y, z, w = xyzw / np.linalg.norm(xyzw)
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
+def fit_tool(chain, rows, positions, quaternions):
+    """The fixed tool transform that best carries `chain`'s FK onto recorded poses, and what it leaves.
+
+    The recorder logs the controller's own FK at its configured TCP, which is
+    not this URDF's tool link; one constant transform after the tool absorbs
+    that. It cannot absorb a joint modelled differently from the controller
+    that recorded (a flipped axis, a moved origin): that leaves residuals that
+    follow the joint. Returns the tool rotation and offset, then the position
+    (m) and rotation (rad) residual of every row.
+    """
+    rotations, points = zip(*(chain.fk(q) for q in rows))
+    r, p = np.array(rotations), np.array(points)
+    positions = np.asarray(positions, dtype=np.float64)
+    recorded = np.array([_quaternion_rotation(np.asarray(q, dtype=np.float64)) for q in quaternions])
+    # Rotation: the SO(3) projection of sum(R_i^T R_rec_i); offset: least squares of p_i + R_i t = P_i.
+    u, _, vt = np.linalg.svd(np.einsum("nji,njk->ik", r, recorded))
+    tool_r = u @ np.diag([1.0, 1.0, np.sign(np.linalg.det(u @ vt))]) @ vt
+    tool_p = np.linalg.lstsq(r.reshape(-1, 3), (positions - p).reshape(-1), rcond=None)[0]
+    position_error = np.linalg.norm(p + r @ tool_p - positions, axis=1)
+    cosine = (np.einsum("nij,nij->n", r @ tool_r, recorded) - 1.0) / 2.0
+    return tool_r, tool_p, position_error, np.arccos(np.clip(cosine, -1.0, 1.0))
 
 
 class Remap:

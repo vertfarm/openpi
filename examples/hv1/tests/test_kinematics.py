@@ -8,8 +8,11 @@ import pytest
 from examples.hv1.artifacts import ContractError
 from examples.hv1.kinematics import Chain
 from examples.hv1.kinematics import Remap
+from examples.hv1.kinematics import _quaternion_rotation
+from examples.hv1.kinematics import _rpy
 from examples.hv1.kinematics import check_step
 from examples.hv1.kinematics import field_limits
+from examples.hv1.kinematics import fit_tool
 from examples.hv1.tests.conftest import ARM_JOINTS
 
 POSE = np.array([0.4, -0.1, 0.2, 0.9, 0.05, 0.3, 0.2])
@@ -138,3 +141,37 @@ def test_chain_needs_the_tool_link_and_supported_joints(arm_urdf, tmp_path):
     odd.write_text(text, encoding="utf-8")
     with pytest.raises(ContractError, match="unsupported"):
         Chain.from_urdf(odd, "Right_tool0")
+
+
+def _quaternion(r):
+    w = np.sqrt(1.0 + np.trace(r)) / 2.0
+    return np.array([(r[2, 1] - r[1, 2]) / (4 * w), (r[0, 2] - r[2, 0]) / (4 * w), (r[1, 0] - r[0, 1]) / (4 * w), w])
+
+
+def test_quaternion_rotation_is_xyzw_and_normalises():
+    r = _rpy(0.3, -0.4, 0.5)
+    np.testing.assert_allclose(_quaternion_rotation(_quaternion(r)), r, atol=1e-12)
+    np.testing.assert_allclose(_quaternion_rotation(3.0 * _quaternion(r)), r, atol=1e-12)
+    # Known value: 90 deg about z is xyzw (0, 0, sin 45, cos 45).
+    half = np.sqrt(0.5)
+    np.testing.assert_allclose(
+        _quaternion_rotation(np.array([0, 0, half, half])), [[0, -1, 0], [1, 0, 0], [0, 0, 1]], atol=1e-12
+    )
+
+
+def test_tool_fit_names_the_arm_a_log_was_recorded_on(arm_urdf):
+    """A fixed TCP of the recorder's own is absorbed; a wrist modelled the other
+    way round (the 2026-09-30 remount) is not."""
+    recorded_on = Chain.from_urdf(arm_urdf("old"), "Right_tool0")
+    remounted = Chain.from_urdf(arm_urdf("remounted", flip_wrist=True), "Right_tool0")
+    tcp_r, tcp_p = _rpy(0.1, -0.2, 0.3), np.array([0.01, -0.02, -0.08])
+    rows = POSE + np.linspace(0, 0.3, 12)[:, None] * np.array([1, -1, 1, 0.5, 1, -1, 2])
+    logged = [recorded_on.fk(q) for q in rows]
+    positions = [p + r @ tcp_p for r, p in logged]
+    quaternions = [_quaternion(r @ tcp_r) for r, _ in logged]
+    fit_r, fit_p, position, rotation = fit_tool(recorded_on, rows, positions, quaternions)
+    np.testing.assert_allclose(fit_r, tcp_r, atol=1e-9)
+    np.testing.assert_allclose(fit_p, tcp_p, atol=1e-9)
+    assert position.max() < 1e-9 and rotation.max() < 1e-6
+    _, _, position, rotation = fit_tool(remounted, rows, positions, quaternions)
+    assert np.median(position) > 0.005 and np.degrees(np.median(rotation)) > 1.0

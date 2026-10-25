@@ -191,14 +191,19 @@ def arm_urdf(tmp_path):
 
     `elbow_x`/`wrist_x` move the elbow and wrist-roll origins in opposite
     directions, the kind of change the 2026-10-20 upper body made, so two calls
-    make an "old" and a "new" arm. `tilt` gives the shoulder-roll joint a
-    non-zero rpy so the URDF frame convention is exercised.
+    make an "old" and a "new" arm. `flip_wrist` turns the wrist pitch axis
+    round and moves its origin sideways, the kind of change the 2026-09-30
+    wrist remount made. `tilt` gives the shoulder-roll joint a non-zero rpy so
+    the URDF frame convention is exercised.
     """
 
-    def make(name, elbow_x=0.0, wrist_x=0.0, limit=1.5708, tilt="0 0 0"):
+    def make(name, elbow_x=0.0, wrist_x=0.0, limit=1.5708, tilt="0 0 0", flip_wrist=False):
         links = ["Base_UpperBody", *(n.removesuffix("_Joint") for n in ARM_JOINTS), "Right_tool0"]
         body = [f'<link name="{link}"/>' for link in links]
-        for index, (joint, axis, origin) in enumerate(zip(ARM_JOINTS, _AXES, _ORIGINS)):
+        axes, origins = list(_AXES), list(_ORIGINS)
+        if flip_wrist:
+            axes[6], origins[6] = "0 -1 0", "0 0.02 -0.05"
+        for index, (joint, axis, origin) in enumerate(zip(ARM_JOINTS, axes, origins)):
             rpy = tilt if index == 1 else "0 0 0"
             body.append(
                 f'<joint name="{joint}" type="revolute"><parent link="{links[index]}"/>'
