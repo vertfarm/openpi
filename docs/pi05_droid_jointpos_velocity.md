@@ -31,7 +31,7 @@ scripts/start_pi05_droid_jointpos_velocity.sh 3
 scripts/status_pi05_droid_jointpos_velocity.sh
 ```
 
-The first start caches the official checkpoint under `/data/keti/snu/home`, records SHA-256
+The first start caches the official checkpoint under `$SNU_DATA_ROOT/home` (default: the parent of `$HOME`), records SHA-256
 checksums, loads the model, and performs two offline warmup inferences before opening port 8001.
 
 Check the running server without constructing `RobotEnv`:

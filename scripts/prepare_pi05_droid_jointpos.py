@@ -6,6 +6,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 
 import tyro
@@ -16,8 +17,9 @@ from openpi.shared import download
 @dataclasses.dataclass
 class Args:
     checkpoint_dir: str = "gs://openpi-assets/checkpoints/pi05_droid_jointpos"
-    manifest_path: pathlib.Path = pathlib.Path(
-        "/data/keti/snu/home/runtime/pi05-droid-jointpos-velocity/checkpoint-manifest.json"
+    manifest_path: pathlib.Path = dataclasses.field(
+        default_factory=lambda: pathlib.Path(os.environ.get("SNU_DATA_ROOT", pathlib.Path.home().parent))
+        / "home/runtime/pi05-droid-jointpos-velocity/checkpoint-manifest.json"
     )
     reuse_manifest: bool = True
 

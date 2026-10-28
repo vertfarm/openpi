@@ -46,8 +46,8 @@ horizon 15의 episode-boundary-clamped chunk에서만 계산한다. D도 같은 
 
 ## 실행
 
-현장 repo는 `/home/keti/workspace/openpi-hv1`, 캠페인은
-`/home/keti/workspace/hv1-vla-runtime/overnight-20260909`다. 원본·runtime 경계를 검사한다.
+현장 repo는 `~/workspace/openpi-hv1`, 캠페인은
+`~/workspace/hv1-vla-runtime/overnight-20260909`다. 원본·runtime 경계를 검사한다.
 
 ```bash
 # 이미 수행된 준비 단계. 존재하는 출력에는 덮어쓰지 않는다.
