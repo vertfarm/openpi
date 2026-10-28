@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Shared data root that holds home/, workspace/ and tmp/; defaults to the parent of $HOME.
+SNU_DATA_ROOT="${SNU_DATA_ROOT:-$(dirname "$HOME")}"
+
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 GPU_INDEX="${1:-3}"
 PORT="${PORT:-8001}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-gs://openpi-assets/checkpoints/pi05_droid_jointpos}"
 PYTHON_BIN="${PYTHON_BIN:-$REPO/.venv/bin/python}"
-RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-/data/keti/snu/home/runtime/pi05-droid-jointpos-velocity}"
+RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-${SNU_DATA_ROOT}/home/runtime/pi05-droid-jointpos-velocity}"
 PID_FILE="$RUNTIME_ROOT/server.pid"
 GPU_FILE="$RUNTIME_ROOT/physical-gpu"
 PORT_FILE="$RUNTIME_ROOT/port"
@@ -38,10 +41,10 @@ if ! command -v ss >/dev/null 2>&1; then
 fi
 
 mkdir -p "$RUNTIME_ROOT/logs" \
-  "/data/keti/snu/home/.cache/openpi" \
-  "/data/keti/snu/home/.cache/xdg" \
-  "/data/keti/snu/home/.cache/jax" \
-  "/data/keti/snu/tmp"
+  "${SNU_DATA_ROOT}/home/.cache/openpi" \
+  "${SNU_DATA_ROOT}/home/.cache/xdg" \
+  "${SNU_DATA_ROOT}/home/.cache/jax" \
+  "${SNU_DATA_ROOT}/tmp"
 
 if [[ -f "$PID_FILE" ]]; then
   running_pid="$(<"$PID_FILE")"
@@ -81,10 +84,10 @@ if (( data_free_kib < 50 * 1024 * 1024 )); then
   exit 1
 fi
 
-export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-/data/keti/snu/home/.cache/openpi}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/data/keti/snu/home/.cache/xdg}"
-export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-/data/keti/snu/home/.cache/jax}"
-export TMPDIR="${TMPDIR:-/data/keti/snu/tmp}"
+export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-${SNU_DATA_ROOT}/home/.cache/openpi}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${SNU_DATA_ROOT}/home/.cache/xdg}"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${SNU_DATA_ROOT}/home/.cache/jax}"
+export TMPDIR="${TMPDIR:-${SNU_DATA_ROOT}/tmp}"
 export CUDA_VISIBLE_DEVICES="$GPU_INDEX"
 export DROID_PHYSICAL_GPU="$GPU_INDEX"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
