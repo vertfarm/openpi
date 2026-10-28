@@ -135,6 +135,61 @@ def read_numeric(path, *, allow_multiple_cycles=False):
         return state, action, info
 
 
+SPIKE_THRESHOLD_RAD = 0.15
+SPIKE_WINDOW_FRAMES = 2
+SPIKE_RECOVERED_FRACTION = 0.5
+
+
+def find_ik_spikes(
+    series, *, threshold=SPIKE_THRESHOLD_RAD, window=SPIKE_WINDOW_FRAMES, recovered=SPIKE_RECOVERED_FRACTION
+):
+    """Teleoperation IK glitches: a joint that jumps and comes back within a couple of frames.
+
+    A frame is a spike when its step from the previous frame exceeds `threshold`
+    and, within `window` frames, the joint has returned at least `recovered` of
+    that step. Anything that stays displaced is motion, not a glitch. Each joint
+    is judged alone. Returns one `{"joint", "frames", "peak_rad"}` per spike.
+    """
+    series = np.asarray(series, dtype=np.float64)
+    spikes = []
+    for joint in range(series.shape[1]):
+        x = series[:, joint]
+        t = 1
+        while t < len(x):
+            jump = x[t] - x[t - 1]
+            if abs(jump) <= threshold:
+                t += 1
+                continue
+            back = next(
+                (
+                    k
+                    for k in range(1, window + 1)
+                    if t + k < len(x) and (x[t] - x[t + k]) * np.sign(jump) >= recovered * abs(jump)
+                ),
+                None,
+            )
+            if back is None:
+                t += 1
+                continue
+            frames = list(range(t, t + back))
+            peak = float(np.max(np.abs(x[frames] - x[t - 1])))
+            spikes.append(dict(joint=joint, frames=frames, peak_rad=peak))
+            t += back + 1
+    return spikes
+
+
+def repair_ik_spikes(series, **rule):
+    """A copy of `series` with every spike replaced by the line between the frames around it."""
+    cleaned = np.array(series, copy=True)
+    spikes = find_ik_spikes(series, **rule)
+    for spike in spikes:
+        joint, frames = spike["joint"], spike["frames"]
+        before, after = frames[0] - 1, frames[-1] + 1
+        weights = (np.arange(len(frames)) + 1) / (len(frames) + 1)
+        cleaned[frames, joint] = (1 - weights) * series[before, joint] + weights * series[after, joint]
+    return cleaned, spikes
+
+
 def decode_episode(directory, count):
     import av
 

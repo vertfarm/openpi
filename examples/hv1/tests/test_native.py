@@ -112,3 +112,68 @@ def test_video_must_have_exactly_the_numeric_rows(tmp_path, source_episode):
         list(native.decode_episode(directory, 5))
     with pytest.raises(ContractError, match="video ends before row"):
         list(native.decode_episode(directory, 7))
+
+
+def _ramp(frames=12, joints=3):
+    """A smooth, slowly moving arm series: no frame-to-frame step is near the spike threshold."""
+    return np.linspace(0, 0.1, frames, dtype=np.float32)[:, None] * np.arange(1, joints + 1, dtype=np.float32)
+
+
+def test_a_one_frame_ik_spike_is_replaced_by_the_line_between_its_neighbours():
+    series = _ramp()
+    expected = series.copy()
+    series[5, 1] += 0.7
+    cleaned, fixes = native.repair_ik_spikes(series)
+    np.testing.assert_allclose(cleaned, expected, atol=1e-6)
+    assert [(f["joint"], f["frames"]) for f in fixes] == [(1, [5])]
+    assert fixes[0]["peak_rad"] == pytest.approx(0.7 + (expected[5, 1] - expected[4, 1]), abs=1e-5)
+    assert native.find_ik_spikes(cleaned) == []
+
+
+def test_a_two_frame_ik_spike_is_repaired_when_it_returns_within_the_window():
+    series = _ramp()
+    expected = series.copy()
+    series[5:7, 0] += 0.5
+    cleaned, fixes = native.repair_ik_spikes(series)
+    np.testing.assert_allclose(cleaned, expected, atol=1e-6)
+    assert [(f["joint"], f["frames"]) for f in fixes] == [(0, [5, 6])]
+
+
+def test_a_jump_that_returns_by_exactly_half_still_counts_as_a_spike():
+    series = np.zeros((8, 1), dtype=np.float32)
+    series[3, 0], series[4, 0] = 0.4, 0.2
+    assert [(f["joint"], f["frames"]) for f in native.find_ik_spikes(series)] == [(0, [3])]
+
+
+@pytest.mark.parametrize(
+    "excursion",
+    [
+        pytest.param([0.5, 0.5, 0.5], id="stays_three_frames"),
+        pytest.param([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], id="step_that_never_returns"),
+        pytest.param([0.14], id="below_threshold"),
+        pytest.param([0.5, 0.45, 0.45], id="returns_less_than_half_in_window"),
+    ],
+)
+def test_real_motion_is_not_mistaken_for_a_spike(excursion):
+    series = np.zeros((10, 1), dtype=np.float32)
+    series[3 : 3 + len(excursion), 0] = excursion
+    cleaned, fixes = native.repair_ik_spikes(series)
+    assert fixes == []
+    np.testing.assert_array_equal(cleaned, series)
+
+
+def test_spikes_are_found_per_joint_and_the_input_is_not_modified():
+    series = _ramp()
+    series[2, 0] += 0.4
+    series[8, 2] -= 0.9
+    before = series.copy()
+    cleaned, fixes = native.repair_ik_spikes(series)
+    np.testing.assert_array_equal(series, before)
+    assert sorted((f["joint"], tuple(f["frames"])) for f in fixes) == [(0, (2,)), (2, (8,))]
+    assert cleaned is not series
+
+
+def test_a_spike_whose_return_would_fall_off_the_end_is_left_alone():
+    series = np.zeros((6, 1), dtype=np.float32)
+    series[5, 0] = 0.6
+    assert native.find_ik_spikes(series) == []
