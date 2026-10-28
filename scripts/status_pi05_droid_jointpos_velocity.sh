@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Shared data root that holds home/, workspace/ and tmp/; defaults to the parent of $HOME.
+SNU_DATA_ROOT="${SNU_DATA_ROOT:-$(dirname "$HOME")}"
+
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-/data/keti/snu/home/runtime/pi05-droid-jointpos-velocity}"
+RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-${SNU_DATA_ROOT}/home/runtime/pi05-droid-jointpos-velocity}"
 PID_FILE="$RUNTIME_ROOT/server.pid"
 GPU_FILE="$RUNTIME_ROOT/physical-gpu"
 PORT_FILE="$RUNTIME_ROOT/port"

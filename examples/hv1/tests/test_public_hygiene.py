@@ -20,11 +20,15 @@ SCANNED = [REPO / "AGENTS.md", REPO / "CLAUDE.md"] + sorted(
     and path.suffix in {".py", ".md", ".json", ".yaml", ".yml", ".txt", ".html", ".cfg", ".xml", ".sh", ".toml"}
     and "__pycache__" not in path.parts
     and path.name != Path(__file__).name
-)
+) + sorted((REPO / "scripts").glob("*pi05_droid_jointpos*")) + [REPO / "docs/pi05_droid_jointpos_velocity.md"]
 FORBIDDEN = {
     "private IPv4 address": re.compile(r"\b(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"),
     "ssh command with a port": re.compile(r"\bssh\s+(?:-\w+\s+)*-p\s*\d+"),
     "user@address": re.compile(r"\b[a-z_][\w.-]*@\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
+    # An absolute path through a named account's home or data area tells a
+    # reader which accounts the lab machines have. Write `~/workspace/...` or
+    # read the root from an environment variable instead.
+    "account path": re.compile(r"(?<![\w}])/(?:home|Users)/(?!<)[a-z_][\w.-]*/|/data/keti/"),
     "private key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     "GitHub token": re.compile(r"\b(?:ghp|gho|ghs|ghu)_[A-Za-z0-9]{20,}|\bgithub_pat_\w{20,}"),
     # A literal value: quoted, or a bare word ending the line. Code such as
@@ -57,12 +61,14 @@ def test_the_patterns_catch_what_they_are_for():
         "private IPv4 address": "--mqtt-host 192.168.0.9",
         "ssh command with a port": "ssh -p 2200 host",
         "user@address": "robot@10.0.0.5",
+        "account path": "/home/keti/workspace/openpi-hv1",
         "private key": "-----BEGIN OPENSSH PRIVATE KEY-----",
         "GitHub token": "ghp_" + "a" * 36,
         "inline credential": "password=hunter22",
     }
     samples_quoted = {
         "inline credential": 'api_key = "abcd1234efgh"',
+        "account path": "/data/keti/snu/home/.cache/openpi",
     }
     for kind, sample in [*samples.items(), *samples_quoted.items()]:
         assert FORBIDDEN[kind].search(sample), kind
@@ -72,5 +78,9 @@ def test_the_patterns_catch_what_they_are_for():
         "token budget",
         "password: <ask on site>",
         "token = secrets.token_urlsafe(32)",
+        "~/workspace/openpi-hv1",
+        "/home/<user>/workspace",
+        "${SNU_DATA_ROOT}/home/runtime/pi05",
+        "$HOME/.cache/openpi",
     ):
         assert not any(pattern.search(allowed) for pattern in FORBIDDEN.values()), allowed

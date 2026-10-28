@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-/data/keti/snu/home/runtime/pi05-droid-jointpos-velocity}"
+# Shared data root that holds home/, workspace/ and tmp/; defaults to the parent of $HOME.
+SNU_DATA_ROOT="${SNU_DATA_ROOT:-$(dirname "$HOME")}"
+
+RUNTIME_ROOT="${SNU_RUNTIME_ROOT:-${SNU_DATA_ROOT}/home/runtime/pi05-droid-jointpos-velocity}"
 PID_FILE="$RUNTIME_ROOT/server.pid"
 
 if [[ ! -f "$PID_FILE" ]]; then

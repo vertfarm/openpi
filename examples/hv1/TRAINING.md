@@ -81,8 +81,8 @@ robot-control authority.
 
 ```bash
 python -B -m examples.hv1.pipeline prepare \
-  --old /home/keti/workspace/keti_humanoid_ros2/datasets/keti_humanoid_data_260909 \
-  --today /home/keti/workspace/keti_humanoid_ros2/datasets/keti_humanoid_data_260910 \
+  --old ~/workspace/keti_humanoid_ros2/datasets/keti_humanoid_data_260909 \
+  --today ~/workspace/keti_humanoid_ros2/datasets/keti_humanoid_data_260910 \
   --campaign "$CAMPAIGN"
 python -B -m examples.hv1.pipeline export --campaign "$CAMPAIGN"
 python -B -m examples.hv1.pipeline stats --campaign "$CAMPAIGN" --track TODAY30
