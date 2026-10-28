@@ -18,18 +18,25 @@ from .workflow import validate_profile
 
 PROMPT = "Pick up the silver cylindrical part from the table with the right hand and place it on the tray."
 CAMERAS = ("head", "hand_l", "hand_r")
-ARM_STATE = [
-    f"position/Right_{x}_Joint"
-    for x in (
-        "Shoulder_Pitch",
-        "Shoulder_Roll",
-        "Shoulder_Yaw",
-        "Elbow_Pitch",
-        "Wrist_Roll",
-        "Wrist_Yaw",
-        "Wrist_Pitch",
-    )
-]
+ARM_JOINTS = (
+    "Shoulder_Pitch",
+    "Shoulder_Roll",
+    "Shoulder_Yaw",
+    "Elbow_Pitch",
+    "Wrist_Roll",
+    "Wrist_Yaw",
+    "Wrist_Pitch",
+)
+
+
+def arm_state(side):
+    """The recorded state labels of one arm, in joint order."""
+    if side not in ("left", "right"):
+        raise ContractError(f"arm side must be 'left' or 'right', got {side!r}")
+    return [f"position/{side.capitalize()}_{x}_Joint" for x in ARM_JOINTS]
+
+
+ARM_STATE = arm_state("right")
 ARM_ACTION = [f"points/positions/arm_r_joint{i}" for i in range(1, 8)]
 HAND_STATE = [f"position/joint_{i}" for i in (10, 11, 12, 21, 22, 30, 31, 32)]
 

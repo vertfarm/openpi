@@ -173,6 +173,50 @@ def test_spikes_are_found_per_joint_and_the_input_is_not_modified():
     assert cleaned is not series
 
 
+RIGHT_ARM_STATE = [
+    "position/Right_Shoulder_Pitch_Joint",
+    "position/Right_Shoulder_Roll_Joint",
+    "position/Right_Shoulder_Yaw_Joint",
+    "position/Right_Elbow_Pitch_Joint",
+    "position/Right_Wrist_Roll_Joint",
+    "position/Right_Wrist_Yaw_Joint",
+    "position/Right_Wrist_Pitch_Joint",
+]
+
+
+def test_the_right_arm_state_names_are_exactly_what_models_were_trained_on():
+    assert native.ARM_STATE == RIGHT_ARM_STATE
+    assert native.arm_state("right") == RIGHT_ARM_STATE
+
+
+def test_the_left_arm_mirrors_the_right_arm_joint_order():
+    left = native.arm_state("left")
+    assert left == [name.replace("Right_", "Left_") for name in RIGHT_ARM_STATE]
+    assert left[0] == "position/Left_Shoulder_Pitch_Joint" and left[-1] == "position/Left_Wrist_Pitch_Joint"
+
+
+def test_an_unknown_arm_side_is_refused():
+    with pytest.raises(ContractError, match="side"):
+        native.arm_state("head")
+
+
+# The remaining two-arm pieces need names and numbers that only the 2026-10-27 recordings can confirm.
+# They stay skipped until the numeric export has been read; nothing here is guessed.
+@pytest.mark.skip(reason="needs the recorded action label names for the left arm")
+def test_left_arm_action_names_come_from_the_recorded_labels():
+    raise AssertionError("fill in from the recordings")
+
+
+@pytest.mark.skip(reason="needs the recorded left-hand joint labels")
+def test_left_hand_state_channels_come_from_the_recorded_labels():
+    raise AssertionError("fill in from the recordings")
+
+
+@pytest.mark.skip(reason="needs the recorded hand mode numbers for circular, tripod and pinch_2f")
+def test_hand_modes_are_accepted_by_number_from_the_recordings():
+    raise AssertionError("fill in from the recordings")
+
+
 def test_a_spike_whose_return_would_fall_off_the_end_is_left_alone():
     series = np.zeros((6, 1), dtype=np.float32)
     series[5, 0] = 0.6
