@@ -8,6 +8,7 @@ The live frames go through the identical path deploy_server.prepare_images uses,
 so what the sheet shows is what the policy sees.
 """
 
+import os
 import subprocess
 import sys
 
@@ -15,12 +16,13 @@ import av
 import cv2
 import numpy as np
 
-sys.path.insert(0, "/home/keti/workspace/openpi-hv1")
+WORKSPACE = os.path.expanduser("~/workspace")
+sys.path.insert(0, f"{WORKSPACE}/openpi-hv1")
 from openpi_client.image_tools import resize_with_pad  # noqa: E402
 
 CAMERAS = ("head", "hand_l", "hand_r")
-EPISODE = "/home/keti/workspace/keti_humanoid_ros2/datasets/keti_humanoid_data_260910/episodes/episode_000000"
-OUT = "/home/keti/workspace/hv1-camera-input-check.jpg"
+EPISODE = f"{WORKSPACE}/keti_humanoid_ros2/datasets/keti_humanoid_data_260910/episodes/episode_000000"
+OUT = f"{WORKSPACE}/hv1-camera-input-check.jpg"
 TOPICS = {
     "head": "/kh/upper_body/head/color/image_raw/compressed",
     "hand_l": "/kdex_3f/left/camera/image_raw/compressed",

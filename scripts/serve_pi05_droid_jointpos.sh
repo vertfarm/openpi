@@ -20,12 +20,15 @@
 
 set -euo pipefail
 
+# Shared data root that holds home/, workspace/ and tmp/; defaults to the parent of $HOME.
+SNU_DATA_ROOT="${SNU_DATA_ROOT:-$(dirname "$HOME")}"
+
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 GPU_INDEX="${1:-0}"
 PORT="${PORT:-8000}"
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_droid_jointpos}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-/data/keti/snu/workspace/ckpt/team1/pi05_droid_jointpos_pytorch}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-${SNU_DATA_ROOT}/workspace/ckpt/team1/pi05_droid_jointpos_pytorch}"
 PYTHON_BIN="${PYTHON_BIN:-$REPO/.venv/bin/python}"
 
 if ! [[ "$GPU_INDEX" =~ ^[0-9]+$ ]]; then
